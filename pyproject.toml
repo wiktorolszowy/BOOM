@@ -6,7 +6,16 @@ build-backend = "setuptools.build_meta"
 name = "boom"
 version = "0.0.0"
 
-dependencies =["numpy", "scikit-learn", "matplotlib", "seaborn", "rdkit", "tqdm", "requests"]
+dependencies =[
+    "numpy",
+    "scikit-learn",
+    "matplotlib",
+    "seaborn",
+    "rdkit",
+    "tqdm",
+    "requests",
+    "xgboost>=2.1.4",
+]
 readme = "README.md"
 requires-python = ">=3.9"
 
