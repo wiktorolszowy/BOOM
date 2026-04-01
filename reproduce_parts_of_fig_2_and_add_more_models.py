@@ -2,8 +2,8 @@
 """
 Reproduce RF R² from BOOM Figure 2 for all 10 endpoints
 (Density, HoF, alpha, cv, gap, homo, lumo, mu, r2, zpve).
-Also adds Elastic Net (with degree-2 interaction features) and
-XGBoost-linear with early stopping (not in the paper).
+Also adds Chemprop (MPNN), Elastic Net (with degree-2 interaction
+features), and XGBoost-linear with early stopping.
 
 Self-contained: handles data download, CSV preparation, OOD split
 generation (with progress output), feature caching, and model
@@ -13,7 +13,9 @@ Run from:  repo root
 Usage:     python reproduce_parts_of_fig_2_and_add_more_models.py
 """
 
+import argparse
 import datetime
+import json
 import os
 import random
 import subprocess
@@ -22,8 +24,14 @@ import tarfile
 import time
 from multiprocessing import Pool
 
+import lightning as pl
 import numpy as np
-from rdkit import RDLogger
+import torch
+from chemprop import data as chemprop_data
+from chemprop import models as chemprop_models
+from chemprop import nn as chemprop_nn
+from lightning.pytorch.callbacks import EarlyStopping
+from rdkit import Chem, RDLogger
 from rdkit.Chem import Descriptors, MolFromSmiles, MolToInchi
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.feature_selection import SelectKBest, f_regression
@@ -469,7 +477,22 @@ def binned_r2(true, pred, train_median):
 
 
 # ===== Model definitions ====================================================
-MODELS = {
+# Chemprop hyperparameters (MPNN, trained via PyTorch Lightning)
+CHEMPROP_PARAMS = {
+    "d_h": 300,  # hidden dim for message passing
+    "depth": 3,  # message-passing depth
+    "ffn_hidden_dim": 300,  # FFN hidden dim
+    "ffn_n_layers": 2,  # FFN layers
+    "dropout": 0.0,
+    "max_lr": 1e-3,
+    "batch_norm": True,
+    "batch_size": 64,
+    "max_epochs": 100,
+    "patience": 10,  # early-stopping patience
+}
+
+# Descriptor-based models (sklearn / xgboost)
+DESCRIPTOR_MODELS = {
     "RF": lambda: RandomForestRegressor(
         n_estimators=500,
         max_features="sqrt",
@@ -498,17 +521,170 @@ MODELS = {
     ),
 }
 
+# Ordered list of all model names (Chemprop first, then descriptor-based)
+ALL_MODEL_NAMES = ["Chemprop", *DESCRIPTOR_MODELS]
 
-def run_all_models():
+
+# ===== Chemprop (MPNN) training helper =======================================
+
+
+def _train_chemprop(train_ds, id_ds, ood_ds):
+    """Train a chemprop MPNN on SMILES and return (id_pred, ood_pred) in
+    original scale.  Uses PyTorch Lightning with CPU, early stopping,
+    and the RegressionFFN output transform for automatic unscaling."""
+    p = CHEMPROP_PARAMS
+
+    def _make_datapoints(smiles_dataset):
+        dps = []
+        for smi, target in smiles_dataset:
+            mol = Chem.MolFromSmiles(smi)
+            if mol is not None:
+                dps.append(chemprop_data.MoleculeDatapoint(mol, y=np.array([target])))
+        return dps
+
+    train_dps = _make_datapoints(train_ds)
+    id_dps = _make_datapoints(id_ds)
+    ood_dps = _make_datapoints(ood_ds)
+
+    # 90/10 train / val split for early stopping
+    rng = np.random.RandomState(42)
+    idx = rng.permutation(len(train_dps))
+    val_n = max(1, len(train_dps) // 10)
+    val_dps = [train_dps[i] for i in idx[:val_n]]
+    tr_dps = [train_dps[i] for i in idx[val_n:]]
+
+    train_dataset = chemprop_data.MoleculeDataset(tr_dps)
+    val_dataset = chemprop_data.MoleculeDataset(val_dps)
+    id_dataset = chemprop_data.MoleculeDataset(id_dps)
+    ood_dataset = chemprop_data.MoleculeDataset(ood_dps)
+
+    # Normalise targets — chemprop's scaler is the sole normalisation.
+    # output_transform will reverse this, so predictions are in original scale.
+    scaler = train_dataset.normalize_targets()
+    val_dataset.normalize_targets(scaler)
+
+    _nw = min(N_CPUS - 1, 15)  # dataloader workers
+    train_loader = chemprop_data.build_dataloader(
+        train_dataset,
+        batch_size=p["batch_size"],
+        shuffle=True,
+        num_workers=_nw,
+    )
+    val_loader = chemprop_data.build_dataloader(
+        val_dataset,
+        batch_size=p["batch_size"],
+        shuffle=False,
+        num_workers=_nw,
+    )
+    id_loader = chemprop_data.build_dataloader(
+        id_dataset,
+        batch_size=p["batch_size"],
+        shuffle=False,
+        num_workers=_nw,
+    )
+    ood_loader = chemprop_data.build_dataloader(
+        ood_dataset,
+        batch_size=p["batch_size"],
+        shuffle=False,
+        num_workers=_nw,
+    )
+
+    # Build MPNN for regression
+    mp = chemprop_nn.BondMessagePassing(
+        d_h=p["d_h"],
+        depth=p["depth"],
+        dropout=p["dropout"],
+    )
+    agg = chemprop_nn.MeanAggregation()
+    output_transform = chemprop_nn.UnscaleTransform.from_standard_scaler(scaler)
+    ffn = chemprop_nn.RegressionFFN(
+        n_tasks=1,
+        hidden_dim=p["ffn_hidden_dim"],
+        n_layers=p["ffn_n_layers"],
+        dropout=p["dropout"],
+        output_transform=output_transform,
+    )
+    mpnn = chemprop_models.MPNN(
+        mp,
+        agg,
+        ffn,
+        batch_norm=p["batch_norm"],
+        max_lr=p["max_lr"],
+    )
+    n_params = sum(par.numel() for par in mpnn.parameters())
+    print(f"    MPNN: {n_params:,} parameters")
+
+    early_stopping = EarlyStopping(
+        monitor="val_loss",
+        patience=p["patience"],
+        mode="min",
+        verbose=False,
+    )
+    trainer = pl.Trainer(
+        logger=False,
+        enable_checkpointing=False,
+        enable_progress_bar=True,
+        accelerator="cpu",
+        max_epochs=p["max_epochs"],
+        callbacks=[early_stopping],
+    )
+    trainer.fit(mpnn, train_loader, val_loader)
+    stopped_epoch = trainer.current_epoch + 1
+    print(f"    Stopped at epoch {stopped_epoch}/{p['max_epochs']}")
+
+    # Predict — output_transform automatically unscales to original target scale
+    with torch.inference_mode():
+        id_preds = trainer.predict(mpnn, id_loader)
+        ood_preds = trainer.predict(mpnn, ood_loader)
+
+    id_pred = torch.cat(id_preds, dim=0).numpy().flatten()
+    ood_pred = torch.cat(ood_preds, dim=0).numpy().flatten()
+
+    # output_transform unscales predictions to original target scale.
+    return id_pred, ood_pred
+
+
+# ===== Incremental results persistence =======================================
+RESULTS_JSON = os.path.join(SCRIPT_DIR, "results_incremental.json")
+
+
+def _save_results_json(results):
+    """Persist current results dict to JSON (called after each endpoint)."""
+    with open(RESULTS_JSON, "w") as f:
+        json.dump(results, f, indent=2)
+    print(f"  [saved intermediate results to {RESULTS_JSON}]")
+
+
+def _load_results_json():
+    """Load previously saved results, if any."""
+    if os.path.exists(RESULTS_JSON):
+        with open(RESULTS_JSON) as f:
+            data = json.load(f)
+        # Count how many endpoints are covered
+        n = sum(len(v) for v in data.values())
+        print(f"  Loaded {n} model×endpoint results from {RESULTS_JSON}")
+        return data
+    return None
+
+
+def run_all_models(start_from=None):
     print("\n[Step 4] Training models for each endpoint ...")
-    print(f"  Models: {', '.join(MODELS)}\n")
+    print(f"  Models: {', '.join(ALL_MODEL_NAMES)}\n")
 
     # Group endpoints by underlying dataset so each molecule is featurised once
     tenk_eps = [(p, lb) for p, lb in ENDPOINTS if p in ("density", "hof")]
     qm9_eps = [(p, lb) for p, lb in ENDPOINTS if p not in ("density", "hof")]
 
     # results[model_name] = {prop: {"id": ..., "ood": ...}}
-    results = {name: {} for name in MODELS}
+    # Load previous partial results if available
+    prev = _load_results_json()
+    results = prev if prev else {name: {} for name in ALL_MODEL_NAMES}
+    # Ensure every model key exists (handles adding new models to an old JSON)
+    for name in ALL_MODEL_NAMES:
+        results.setdefault(name, {})
+
+    # --start-from: skip endpoints until we reach the requested one
+    skip = start_from is not None
 
     for group_name, eps in [("10k", tenk_eps), ("QM9", qm9_eps)]:
         # ---- collect all unique SMILES in this group ----
@@ -529,7 +705,15 @@ def run_all_models():
 
         # ---- train models per endpoint using cached features ----
         for prop, label in eps:
-            print(f"--- {label} ---")
+            if skip:
+                if prop == start_from:
+                    skip = False
+                    print(f"--- {label} --- (resuming from here)")
+                else:
+                    print(f"--- {label} --- SKIPPED (--start-from {start_from})")
+                    continue
+            else:
+                print(f"--- {label} ---")
             t0_ep = time.time()
 
             train_ds = all_datasets[(prop, "train")]
@@ -590,7 +774,49 @@ def run_all_models():
             _xgb_val_idx = _shuf[:_val_n]
             _xgb_tr_idx = _shuf[_val_n:]
 
-            for model_name, model_factory in MODELS.items():
+            # ---- Chemprop (MPNN): operates on SMILES directly ----
+            t0 = time.time()
+            print("  Training Chemprop (MPNN) ...")
+            cp_id_pred, cp_ood_pred = _train_chemprop(
+                train_ds,
+                id_ds,
+                ood_ds,
+            )
+            # True labels for chemprop: original scale, built from the raw
+            # SMILES datasets (chemprop may have slightly different valid
+            # molecules than the descriptor pipeline, but MolFromSmiles
+            # failures are extremely rare in QM9/10k).
+            cp_id_true = np.array(
+                [t for s, t in id_ds if Chem.MolFromSmiles(s) is not None],
+                dtype=np.float64,
+            )
+            cp_ood_true = np.array(
+                [t for s, t in ood_ds if Chem.MolFromSmiles(s) is not None],
+                dtype=np.float64,
+            )
+            cp_id_r2 = r2_score(cp_id_true, cp_id_pred)
+            cp_ood_r2 = r2_score(cp_ood_true, cp_ood_pred)
+            cp_ood_r2_binned = binned_r2(cp_ood_true, cp_ood_pred, train_med)
+            cp_id_rmse = root_mean_squared_error(cp_id_true, cp_id_pred)
+            cp_ood_rmse = root_mean_squared_error(cp_ood_true, cp_ood_pred)
+            results["Chemprop"][prop] = {
+                "id_r2": cp_id_r2,
+                "ood_r2": cp_ood_r2,
+                "ood_r2_binned": cp_ood_r2_binned,
+                "id_rmse": cp_id_rmse,
+                "ood_rmse": cp_ood_rmse,
+            }
+            elapsed = time.time() - t0
+            print(f"    Train median  = {train_med:.4f}")
+            print(f"    ID  R²        = {cp_id_r2:.4f}")
+            print(f"    OOD R² (plain)= {cp_ood_r2:.4f}")
+            print(f"    OOD R² binned = {cp_ood_r2_binned:.4f}")
+            print(f"    ID  RMSE      = {cp_id_rmse:.4f}")
+            print(f"    OOD RMSE      = {cp_ood_rmse:.4f}")
+            print(f"    ({elapsed:.0f}s)")
+
+            # ---- Descriptor-based models ----
+            for model_name, model_factory in DESCRIPTOR_MODELS.items():
                 t0 = time.time()
                 print(f"  Training {model_name} ...")
                 model = model_factory()
@@ -654,9 +880,20 @@ def run_all_models():
                 print(f"    ({elapsed:.0f}s)")
 
             print(f"  Endpoint total: {time.time()-t0_ep:.0f}s\n")
+            _save_results_json(results)  # persist after each endpoint
+
+    # Check that all endpoints are covered before summary/heatmaps
+    all_props = [p for p, _ in ENDPOINTS]
+    missing = [(m, p) for m in ALL_MODEL_NAMES for p in all_props if p not in results.get(m, {})]
+    if missing:
+        print(f"\n  WARNING: {len(missing)} model×endpoint results still missing.")
+        print("  Run again with --start-from to fill in gaps, ")
+        print("  or use --heatmaps-only once all endpoints are done.")
+        print("  Missing:", [(m, p) for m, p in missing[:10]], "..." if len(missing) > 10 else "")
+        return
 
     # Final summary (preserve original ENDPOINTS order)
-    for model_name in MODELS:
+    for model_name in ALL_MODEL_NAMES:
         print("\n" + "=" * 80)
         print(f"  {model_name}")
         print("=" * 80)
@@ -688,7 +925,7 @@ def plot_heatmaps(results):
     import matplotlib.pyplot as plt
     import seaborn as sns
 
-    model_names = list(MODELS.keys())
+    model_names = list(ALL_MODEL_NAMES)
     prop_labels = [label for _, label in ENDPOINTS]
     prop_keys = [prop for prop, _ in ENDPOINTS]
 
@@ -826,7 +1063,32 @@ def plot_heatmaps(results):
 
 
 # ===== Main =================================================================
+def _parse_args():
+    valid_endpoints = [p for p, _ in ENDPOINTS]
+    parser = argparse.ArgumentParser(
+        description="Reproduce BOOM Figure 2 with 4 models.",
+    )
+    parser.add_argument(
+        "--start-from",
+        choices=valid_endpoints,
+        default=None,
+        help=(
+            "Skip endpoints before this one and resume. "
+            "Existing results are loaded from results_incremental.json. "
+            f"Choices: {', '.join(valid_endpoints)}"
+        ),
+    )
+    parser.add_argument(
+        "--heatmaps-only",
+        action="store_true",
+        help=("Skip all training. Load results_incremental.json and " "regenerate summary tables + heatmap PNGs."),
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
+    args = _parse_args()
+
     # Set up logging to both terminal and a results file
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     log_path = os.path.join(SCRIPT_DIR, f"run_all_r2_{timestamp}.log")
@@ -838,10 +1100,39 @@ if __name__ == "__main__":
     print(f"Log file: {log_path}\n")
 
     try:
-        ensure_qm9_property_csvs()  # Step 1
-        ensure_10k_splits()  # Step 2
-        generate_qm9_splits()  # Step 3
-        run_all_models()  # Step 4
+        if args.heatmaps_only:
+            # Just load saved results and regenerate plots
+            prev = _load_results_json()
+            if prev is None:
+                print(f"ERROR: {RESULTS_JSON} not found. Run training first.")
+                sys.exit(1)
+            # Print summary tables
+            for model_name in ALL_MODEL_NAMES:
+                print("\n" + "=" * 80)
+                print(f"  {model_name}")
+                print("=" * 80)
+                print(
+                    f"{'Endpoint':10s} {'ID R²':>8s}  {'OOD R²':>8s}  "
+                    f"{'OOD R²bin':>10s}  {'ID RMSE':>9s}  {'OOD RMSE':>9s}"
+                )
+                print("-" * 80)
+                for prop, label in ENDPOINTS:
+                    r = prev.get(model_name, {}).get(prop, {})
+                    if r:
+                        print(
+                            f"{label:10s} {r['id_r2']:8.4f}  {r['ood_r2']:8.4f}  "
+                            f"{r['ood_r2_binned']:10.4f}  "
+                            f"{r['id_rmse']:9.4f}  {r['ood_rmse']:9.4f}"
+                        )
+                    else:
+                        print(f"{label:10s}  -- missing --")
+                print("=" * 80)
+            plot_heatmaps(prev)
+        else:
+            ensure_qm9_property_csvs()  # Step 1
+            ensure_10k_splits()  # Step 2
+            generate_qm9_splits()  # Step 3
+            run_all_models(start_from=args.start_from)  # Step 4
     finally:
         log_file.close()
         sys.stdout = sys.__stdout__

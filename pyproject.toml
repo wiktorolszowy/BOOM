@@ -15,9 +15,11 @@ dependencies =[
     "tqdm",
     "requests",
     "xgboost>=2.1.4",
+    "chemprop>=2.2.0",
+    "lightning>=2.0",
 ]
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 
 [project.optional-dependencies]
 viz = ["matplotlib", "seaborn"]
