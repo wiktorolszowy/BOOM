@@ -10,7 +10,7 @@ generation (with progress output), feature caching, and model
 training/evaluation.
 
 Run from:  repo root
-Usage:     python reproduce_parts_of_fig_2_and_add_more_models.py
+Usage:     python reproduce/reproduce_parts_of_fig_2_and_add_more_models.py
 """
 
 import argparse
@@ -44,16 +44,28 @@ from xgboost import XGBRegressor
 
 RDLogger.logger().setLevel(RDLogger.ERROR)  # suppress InChI warnings
 
+N_CPUS = 16  # available hardware: 16 CPUs, 32 GB RAM
+
+# Give PyTorch all available cores for intra-op parallelism (matrix ops
+# inside the MPNN forward/backward pass).  We keep dataloader workers low
+# (see _DL_WORKERS) so they don't compete for the same cores.
+torch.set_num_threads(N_CPUS)
+_DL_WORKERS = min(4, N_CPUS - 1)  # enough to keep the pipeline fed
+
 # ---------------------------------------------------------------------------
-# SCRIPT_DIR = repo root (where this file now lives).
-# DATA_DIR   = experiments/data/ (shared downloads, splits, caches).
+# SCRIPT_DIR = reproduce/ folder (where this file lives).
+#              Logs, heatmaps, and results_incremental.json go here.
+# REPO_ROOT  = parent of SCRIPT_DIR (the BOOM checkout root).
+# DATA_DIR   = experiments/data/ under REPO_ROOT (shared downloads,
+#              splits, caches).
 # os.chdir(DATA_DIR) is required because SMILESDataset resolves split
 # files relative to os.getcwd().
 # ---------------------------------------------------------------------------
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(SCRIPT_DIR, "experiments", "data")
+REPO_ROOT = os.path.dirname(SCRIPT_DIR)
+DATA_DIR = os.path.join(REPO_ROOT, "experiments", "data")
 os.makedirs(DATA_DIR, exist_ok=True)
-sys.path.insert(0, SCRIPT_DIR)
+sys.path.insert(0, REPO_ROOT)
 os.chdir(DATA_DIR)
 
 from boom.data.prepare_splits_10k import generate_splits_10k  # noqa: E402
@@ -112,8 +124,6 @@ ENDPOINTS = [
     ("mu", "μ"),
     ("cv", "Cᵥ"),
 ]
-
-N_CPUS = 16  # available hardware: 16 CPUs, 32 GB RAM
 
 
 # ===== Helpers for parallelisation and fast featurisation ===================
@@ -563,30 +573,29 @@ def _train_chemprop(train_ds, id_ds, ood_ds):
     scaler = train_dataset.normalize_targets()
     val_dataset.normalize_targets(scaler)
 
-    _nw = min(N_CPUS - 1, 15)  # dataloader workers
     train_loader = chemprop_data.build_dataloader(
         train_dataset,
         batch_size=p["batch_size"],
         shuffle=True,
-        num_workers=_nw,
+        num_workers=_DL_WORKERS,
     )
     val_loader = chemprop_data.build_dataloader(
         val_dataset,
         batch_size=p["batch_size"],
         shuffle=False,
-        num_workers=_nw,
+        num_workers=_DL_WORKERS,
     )
     id_loader = chemprop_data.build_dataloader(
         id_dataset,
         batch_size=p["batch_size"],
         shuffle=False,
-        num_workers=_nw,
+        num_workers=_DL_WORKERS,
     )
     ood_loader = chemprop_data.build_dataloader(
         ood_dataset,
         batch_size=p["batch_size"],
         shuffle=False,
-        num_workers=_nw,
+        num_workers=_DL_WORKERS,
     )
 
     # Build MPNN for regression

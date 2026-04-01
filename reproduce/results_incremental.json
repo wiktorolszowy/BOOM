@@ -1,0 +1,150 @@
+{
+  "Chemprop": {
+    "hof": {
+      "id_r2": 0.9577,
+      "ood_r2": 0.8482,
+      "ood_r2_binned": 0.1788,
+      "id_rmse": 16.3641,
+      "ood_rmse": 89.2475
+    },
+    "density": {
+      "id_r2": 0.9843,
+      "ood_r2": 0.9771,
+      "ood_r2_binned": 0.7925,
+      "id_rmse": 0.0092,
+      "ood_rmse": 0.0325
+    },
+    "homo": {
+      "id_r2": 0.9373,
+      "ood_r2": 0.8708,
+      "ood_r2_binned": -1.4595,
+      "id_rmse": 0.0041,
+      "ood_rmse": 0.0195
+    },
+    "lumo": {
+      "id_r2": 0.9896,
+      "ood_r2": 0.9288,
+      "ood_r2_binned": -3.8215,
+      "id_rmse": 0.0041,
+      "ood_rmse": 0.0216
+    },
+    "gap": {
+      "id_r2": 0.9787,
+      "ood_r2": 0.922,
+      "ood_r2_binned": -2.237,
+      "id_rmse": 0.006,
+      "ood_rmse": 0.0263
+    }
+  },
+  "RF": {
+    "hof": {
+      "id_r2": 0.9083,
+      "ood_r2": 0.6268,
+      "ood_r2_binned": -2.4361,
+      "id_rmse": 24.0924,
+      "ood_rmse": 139.9476
+    },
+    "density": {
+      "id_r2": 0.8915,
+      "ood_r2": 0.2857,
+      "ood_r2_binned": -6.6021,
+      "id_rmse": 0.0242,
+      "ood_rmse": 0.1815
+    },
+    "homo": {
+      "id_r2": 0.8624,
+      "ood_r2": 0.6776,
+      "ood_r2_binned": -5.162,
+      "id_rmse": 0.0061,
+      "ood_rmse": 0.0308
+    },
+    "lumo": {
+      "id_r2": 0.9708,
+      "ood_r2": 0.7671,
+      "ood_r2_binned": -9.2514,
+      "id_rmse": 0.0069,
+      "ood_rmse": 0.039
+    },
+    "gap": {
+      "id_r2": 0.9555,
+      "ood_r2": 0.8361,
+      "ood_r2_binned": -5.8436,
+      "id_rmse": 0.0087,
+      "ood_rmse": 0.0381
+    }
+  },
+  "ElasticNet": {
+    "hof": {
+      "id_r2": 0.9794,
+      "ood_r2": 0.9838,
+      "ood_r2_binned": 0.6779,
+      "id_rmse": 11.4082,
+      "ood_rmse": 29.1601
+    },
+    "density": {
+      "id_r2": 0.9766,
+      "ood_r2": 0.9489,
+      "ood_r2_binned": 0.5439,
+      "id_rmse": 0.0112,
+      "ood_rmse": 0.0485
+    },
+    "homo": {
+      "id_r2": 0.7625,
+      "ood_r2": 0.8271,
+      "ood_r2_binned": -2.2969,
+      "id_rmse": 0.008,
+      "ood_rmse": 0.0226
+    },
+    "lumo": {
+      "id_r2": 0.9217,
+      "ood_r2": 0.8649,
+      "ood_r2_binned": -9.1501,
+      "id_rmse": 0.0113,
+      "ood_rmse": 0.0297
+    },
+    "gap": {
+      "id_r2": 0.904,
+      "ood_r2": 0.8447,
+      "ood_r2_binned": -5.4088,
+      "id_rmse": 0.0128,
+      "ood_rmse": 0.0371
+    }
+  },
+  "XGB-linear": {
+    "hof": {
+      "id_r2": 0.7512,
+      "ood_r2": 0.7228,
+      "ood_r2_binned": -3.1167,
+      "id_rmse": 39.695,
+      "ood_rmse": 120.6096
+    },
+    "density": {
+      "id_r2": 0.6378,
+      "ood_r2": 0.1978,
+      "ood_r2_binned": -11.7944,
+      "id_rmse": 0.0442,
+      "ood_rmse": 0.1923
+    },
+    "homo": {
+      "id_r2": 0.3485,
+      "ood_r2": 0.2643,
+      "ood_r2_binned": -13.112,
+      "id_rmse": 0.0133,
+      "ood_rmse": 0.0466
+    },
+    "lumo": {
+      "id_r2": 0.6107,
+      "ood_r2": 0.4896,
+      "ood_r2_binned": -69.3126,
+      "id_rmse": 0.0252,
+      "ood_rmse": 0.0577
+    },
+    "gap": {
+      "id_r2": 0.6335,
+      "ood_r2": 0.5731,
+      "ood_r2_binned": -17.9309,
+      "id_rmse": 0.025,
+      "ood_rmse": 0.0614
+    }
+  }
+}

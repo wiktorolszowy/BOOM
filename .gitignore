@@ -744,4 +744,3 @@ experiments/chemprop/plot_results.ipynb
 *.gz
 *.npz
 *.png
-results_incremental.json
