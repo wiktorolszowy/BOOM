@@ -10,7 +10,7 @@ generation (with progress output), feature caching, and model
 training/evaluation.
 
 Run from:  repo root
-Usage:     python reproduce/reproduce_parts_of_fig_2_and_add_more_models.py
+Usage:     python3 reproduce_parts_of_fig_2_and_add_more_models.py
 """
 
 import argparse
@@ -37,33 +37,24 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.feature_selection import SelectKBest, f_regression
 from sklearn.linear_model import ElasticNetCV
 from sklearn.metrics import r2_score, root_mean_squared_error
-from sklearn.neighbors import KernelDensity
 from sklearn.preprocessing import PolynomialFeatures, StandardScaler
+from scipy.stats import gaussian_kde
 from tqdm import tqdm
 from xgboost import XGBRegressor
 
 RDLogger.logger().setLevel(RDLogger.ERROR)  # suppress InChI warnings
 
-N_CPUS = 16  # available hardware: 16 CPUs, 32 GB RAM
-
-# Give PyTorch all available cores for intra-op parallelism (matrix ops
-# inside the MPNN forward/backward pass).  We keep dataloader workers low
-# (see _DL_WORKERS) so they don't compete for the same cores.
-torch.set_num_threads(N_CPUS)
-_DL_WORKERS = min(4, N_CPUS - 1)  # enough to keep the pipeline fed
-
 # ---------------------------------------------------------------------------
-# SCRIPT_DIR = reproduce/ folder (where this file lives).
-#              Logs, heatmaps, and results_incremental.json go here.
-# REPO_ROOT  = parent of SCRIPT_DIR (the BOOM checkout root).
-# DATA_DIR   = experiments/data/ under REPO_ROOT (shared downloads,
-#              splits, caches).
+# SCRIPT_DIR = reproduce/ (where this file lives).
+# REPO_ROOT  = parent of SCRIPT_DIR (where the boom package lives).
+# DATA_DIR   = reproduce/experiments/data/ (self-contained downloads,
+#              splits, and caches).
 # os.chdir(DATA_DIR) is required because SMILESDataset resolves split
 # files relative to os.getcwd().
 # ---------------------------------------------------------------------------
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(SCRIPT_DIR)
-DATA_DIR = os.path.join(REPO_ROOT, "experiments", "data")
+DATA_DIR = os.path.join(SCRIPT_DIR, "experiments", "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 sys.path.insert(0, REPO_ROOT)
 os.chdir(DATA_DIR)
@@ -124,6 +115,15 @@ ENDPOINTS = [
     ("mu", "μ"),
     ("cv", "Cᵥ"),
 ]
+
+
+def _default_n_cpus():
+    """Detect usable CPU count."""
+    return max(1, os.cpu_count() or 1)
+
+
+N_CPUS = _default_n_cpus()
+CHEMPROP_SMOKE_TEST = False
 
 
 # ===== Helpers for parallelisation and fast featurisation ===================
@@ -397,18 +397,14 @@ def generate_qm9_splits():
         smiles_list = list(dataframe.keys())
         values = np.array([dataframe[s][prop_name] for s in smiles_list], dtype=np.float64).reshape(-1, 1)
 
-        # 3b. KDE fit
+        # 3b. KDE fit + score (scipy gaussian_kde is vectorised and
+        #     orders of magnitude faster than sklearn for 1-D data)
         print(f"  Fitting KDE (n={len(values)}) ...")
         t0 = time.time()
-        kde = KernelDensity(kernel="gaussian", bandwidth="scott").fit(values)
-        print(f"  KDE fit done in {time.time()-t0:.1f}s")
-
-        # 3c. KDE score
-        print(f"  Scoring {len(values)} samples ...")
-        t0 = time.time()
-        log_scores = kde.score_samples(values)
-        scores = np.exp(log_scores)
-        print(f"  Scoring done in {time.time()-t0:.1f}s")
+        vals_1d = values.flatten()
+        kde = gaussian_kde(vals_1d, bw_method="scott")
+        scores = kde.evaluate(vals_1d)
+        print(f"  KDE fit+score done in {time.time()-t0:.1f}s")
 
         # 3d. Select OOD (lowest-density tail)
         ood_indices = set(np.argpartition(scores, num_ood_samples)[:num_ood_samples])
@@ -496,7 +492,7 @@ CHEMPROP_PARAMS = {
     "dropout": 0.0,
     "max_lr": 1e-3,
     "batch_norm": True,
-    "batch_size": 64,
+    "batch_size": 256,
     "max_epochs": 100,
     "patience": 10,  # early-stopping patience
 }
@@ -542,19 +538,46 @@ def _train_chemprop(train_ds, id_ds, ood_ds):
     """Train a chemprop MPNN on SMILES and return (id_pred, ood_pred) in
     original scale.  Uses PyTorch Lightning with CPU, early stopping,
     and the RegressionFFN output transform for automatic unscaling."""
-    p = CHEMPROP_PARAMS
+    p = CHEMPROP_PARAMS.copy()
 
     def _make_datapoints(smiles_dataset):
         dps = []
+        ys = []
         for smi, target in smiles_dataset:
             mol = Chem.MolFromSmiles(smi)
             if mol is not None:
                 dps.append(chemprop_data.MoleculeDatapoint(mol, y=np.array([target])))
-        return dps
+                ys.append(float(target))
+        return dps, np.array(ys, dtype=np.float64)
 
-    train_dps = _make_datapoints(train_ds)
-    id_dps = _make_datapoints(id_ds)
-    ood_dps = _make_datapoints(ood_ds)
+    train_dps, _ = _make_datapoints(train_ds)
+    id_dps, id_true = _make_datapoints(id_ds)
+    ood_dps, ood_true = _make_datapoints(ood_ds)
+
+    if CHEMPROP_SMOKE_TEST:
+        # Tiny model + tiny subsets to validate pipeline wiring quickly.
+        p.update(
+            {
+                "d_h": 64,
+                "depth": 2,
+                "ffn_hidden_dim": 64,
+                "ffn_n_layers": 1,
+                "batch_size": 1024,
+                "max_epochs": 2,
+                "patience": 1,
+            }
+        )
+        max_train = 512
+        max_eval = 256
+        train_dps = train_dps[:max_train]
+        id_dps = id_dps[:max_eval]
+        ood_dps = ood_dps[:max_eval]
+        id_true = id_true[:max_eval]
+        ood_true = ood_true[:max_eval]
+        print("    [Chemprop smoke-test] " f"train={len(train_dps)}, id={len(id_dps)}, ood={len(ood_dps)}")
+
+    if len(train_dps) < 2:
+        raise RuntimeError("Chemprop needs at least 2 valid training molecules.")
 
     # 90/10 train / val split for early stopping
     rng = np.random.RandomState(42)
@@ -573,29 +596,30 @@ def _train_chemprop(train_ds, id_ds, ood_ds):
     scaler = train_dataset.normalize_targets()
     val_dataset.normalize_targets(scaler)
 
+    _nw = 0 if CHEMPROP_SMOKE_TEST else min(N_CPUS - 1, 15)  # dataloader workers
     train_loader = chemprop_data.build_dataloader(
         train_dataset,
         batch_size=p["batch_size"],
         shuffle=True,
-        num_workers=_DL_WORKERS,
+        num_workers=_nw,
     )
     val_loader = chemprop_data.build_dataloader(
         val_dataset,
         batch_size=p["batch_size"],
         shuffle=False,
-        num_workers=_DL_WORKERS,
+        num_workers=_nw,
     )
     id_loader = chemprop_data.build_dataloader(
         id_dataset,
         batch_size=p["batch_size"],
         shuffle=False,
-        num_workers=_DL_WORKERS,
+        num_workers=_nw,
     )
     ood_loader = chemprop_data.build_dataloader(
         ood_dataset,
         batch_size=p["batch_size"],
         shuffle=False,
-        num_workers=_DL_WORKERS,
+        num_workers=_nw,
     )
 
     # Build MPNN for regression
@@ -629,13 +653,25 @@ def _train_chemprop(train_ds, id_ds, ood_ds):
         mode="min",
         verbose=False,
     )
+    if torch.backends.mps.is_available():
+        accelerator = "mps"
+    elif torch.cuda.is_available():
+        accelerator = "gpu"
+    else:
+        accelerator = "cpu"
+    print(f"    Lightning accelerator: {accelerator}")
+
     trainer = pl.Trainer(
         logger=False,
         enable_checkpointing=False,
         enable_progress_bar=True,
-        accelerator="cpu",
+        accelerator=accelerator,
+        devices=1,
         max_epochs=p["max_epochs"],
         callbacks=[early_stopping],
+        limit_train_batches=20 if CHEMPROP_SMOKE_TEST else 1.0,
+        limit_val_batches=5 if CHEMPROP_SMOKE_TEST else 1.0,
+        num_sanity_val_steps=0 if CHEMPROP_SMOKE_TEST else 2,
     )
     trainer.fit(mpnn, train_loader, val_loader)
     stopped_epoch = trainer.current_epoch + 1
@@ -646,11 +682,11 @@ def _train_chemprop(train_ds, id_ds, ood_ds):
         id_preds = trainer.predict(mpnn, id_loader)
         ood_preds = trainer.predict(mpnn, ood_loader)
 
-    id_pred = torch.cat(id_preds, dim=0).numpy().flatten()
-    ood_pred = torch.cat(ood_preds, dim=0).numpy().flatten()
+    id_pred = torch.cat(id_preds, dim=0).detach().cpu().numpy().flatten()
+    ood_pred = torch.cat(ood_preds, dim=0).detach().cpu().numpy().flatten()
 
     # output_transform unscales predictions to original target scale.
-    return id_pred, ood_pred
+    return id_true, id_pred, ood_true, ood_pred
 
 
 # ===== Incremental results persistence =======================================
@@ -786,22 +822,10 @@ def run_all_models(start_from=None):
             # ---- Chemprop (MPNN): operates on SMILES directly ----
             t0 = time.time()
             print("  Training Chemprop (MPNN) ...")
-            cp_id_pred, cp_ood_pred = _train_chemprop(
+            cp_id_true, cp_id_pred, cp_ood_true, cp_ood_pred = _train_chemprop(
                 train_ds,
                 id_ds,
                 ood_ds,
-            )
-            # True labels for chemprop: original scale, built from the raw
-            # SMILES datasets (chemprop may have slightly different valid
-            # molecules than the descriptor pipeline, but MolFromSmiles
-            # failures are extremely rare in QM9/10k).
-            cp_id_true = np.array(
-                [t for s, t in id_ds if Chem.MolFromSmiles(s) is not None],
-                dtype=np.float64,
-            )
-            cp_ood_true = np.array(
-                [t for s, t in ood_ds if Chem.MolFromSmiles(s) is not None],
-                dtype=np.float64,
             )
             cp_id_r2 = r2_score(cp_id_true, cp_id_pred)
             cp_ood_r2 = r2_score(cp_ood_true, cp_ood_pred)
@@ -891,13 +915,13 @@ def run_all_models(start_from=None):
             print(f"  Endpoint total: {time.time()-t0_ep:.0f}s\n")
             _save_results_json(results)  # persist after each endpoint
 
-    # Check that all endpoints are covered before summary/heatmaps
+    # Check that all endpoints are covered before final summary
     all_props = [p for p, _ in ENDPOINTS]
     missing = [(m, p) for m in ALL_MODEL_NAMES for p in all_props if p not in results.get(m, {})]
     if missing:
         print(f"\n  WARNING: {len(missing)} model×endpoint results still missing.")
         print("  Run again with --start-from to fill in gaps, ")
-        print("  or use --heatmaps-only once all endpoints are done.")
+        print("  then run reproduce/make_heatmaps.py once all endpoints are done.")
         print("  Missing:", [(m, p) for m, p in missing[:10]], "..." if len(missing) > 10 else "")
         return
 
@@ -919,156 +943,7 @@ def run_all_models(start_from=None):
             )
         print("=" * 80)
 
-    # ---- Heatmaps ----
-    plot_heatmaps(results)
-
-
-# ===== Heatmaps ==============================================================
-
-
-def plot_heatmaps(results):
-    """Save R², RMSE, and Binned-R² heatmaps (each as ID + OOD stacked)."""
-    import matplotlib
-
-    matplotlib.use("Agg")  # non-interactive backend for headless servers
-    import matplotlib.pyplot as plt
-    import seaborn as sns
-
-    model_names = list(ALL_MODEL_NAMES)
-    prop_labels = [label for _, label in ENDPOINTS]
-    prop_keys = [prop for prop, _ in ENDPOINTS]
-
-    n_models = len(model_names)
-    n_props = len(prop_keys)
-    fig_w = max(12, n_props * 1.4)
-    fig_h = n_models * 1.5 * 2 + 2  # space for two subplots + titles
-
-    def _axis_bottom(ax, ylabel, title, xlabel="Property"):
-        """Move x-tick labels to bottom and set labels/title."""
-        ax.set_title(title, fontsize=14, fontweight="bold", pad=10)
-        ax.set_ylabel(ylabel, fontsize=12)
-        ax.xaxis.set_ticks_position("bottom")
-        ax.xaxis.set_label_position("bottom")
-        ax.set_xlabel(xlabel, fontsize=12)
-        ax.tick_params(axis="x", rotation=0)
-
-    # ================================================================
-    # 1) R² heatmaps  (ID on top, OOD below)
-    #    Color scale fixed [0, 1]; negative values get the "0" color
-    #    but annotations still show the true number.
-    # ================================================================
-    id_r2 = np.array([[results[m][p]["id_r2"] for p in prop_keys] for m in model_names])
-    ood_r2 = np.array([[results[m][p]["ood_r2"] for p in prop_keys] for m in model_names])
-
-    fig_r2, (ax_id_r2, ax_ood_r2) = plt.subplots(2, 1, figsize=(fig_w, fig_h))
-
-    r2_common = dict(
-        annot=True,
-        fmt=".3f",
-        xticklabels=prop_labels,
-        yticklabels=model_names,
-        linewidths=0.5,
-        linecolor="white",
-        annot_kws={"fontsize": 11},
-        cmap="YlGnBu",
-        vmin=0,
-        vmax=1,
-        cbar_kws={"label": "R²", "shrink": 0.8},
-    )
-
-    sns.heatmap(id_r2, ax=ax_id_r2, **r2_common)
-    _axis_bottom(ax_id_r2, "Model", "ID Splits  (R²)")
-
-    sns.heatmap(ood_r2, ax=ax_ood_r2, **r2_common)
-    _axis_bottom(ax_ood_r2, "Model", "OOD Splits  (R²)")
-
-    fig_r2.tight_layout()
-    r2_path = os.path.join(SCRIPT_DIR, "heatmap_r2.png")
-    fig_r2.savefig(r2_path, dpi=150, bbox_inches="tight")
-    plt.close(fig_r2)
-    print(f"\nR² heatmap saved to {r2_path}")
-
-    # ================================================================
-    # 2) RMSE heatmaps  (ID on top, OOD below)
-    #    Different properties live on wildly different scales, so a
-    #    single color range is meaningless.  Instead, normalise each
-    #    property-column to [0, 1]  (0 = best model, 1 = worst) and
-    #    annotate with the real RMSE values.
-    # ================================================================
-    id_rmse = np.array([[results[m][p]["id_rmse"] for p in prop_keys] for m in model_names])
-    ood_rmse = np.array([[results[m][p]["ood_rmse"] for p in prop_keys] for m in model_names])
-
-    def _col_normalise(arr):
-        """Min-max normalise each column independently to [0, 1]."""
-        col_min = arr.min(axis=0, keepdims=True)
-        col_max = arr.max(axis=0, keepdims=True)
-        denom = np.where(col_max - col_min > 0, col_max - col_min, 1.0)
-        return (arr - col_min) / denom
-
-    # Build annotation arrays (strings) with the real RMSE values
-    def _fmt_annot(arr):
-        return np.array([[f"{v:.3f}" for v in row] for row in arr])
-
-    fig_rmse, (ax_id_rmse, ax_ood_rmse) = plt.subplots(2, 1, figsize=(fig_w, fig_h))
-
-    rmse_common = dict(
-        xticklabels=prop_labels,
-        yticklabels=model_names,
-        linewidths=0.5,
-        linecolor="white",
-        annot_kws={"fontsize": 11},
-        cmap="YlGnBu_r",  # blue = low/good, yellow = high/bad
-        vmin=0,
-        vmax=1,
-        fmt="",  # annotations are pre-formatted strings
-        cbar_kws={"label": "Relative RMSE\n(per property, 0 = best)", "shrink": 0.8},
-    )
-
-    sns.heatmap(_col_normalise(id_rmse), ax=ax_id_rmse, annot=_fmt_annot(id_rmse), **rmse_common)
-    _axis_bottom(ax_id_rmse, "Model", "ID Splits  (RMSE)")
-
-    sns.heatmap(_col_normalise(ood_rmse), ax=ax_ood_rmse, annot=_fmt_annot(ood_rmse), **rmse_common)
-    _axis_bottom(ax_ood_rmse, "Model", "OOD Splits  (RMSE)")
-
-    fig_rmse.tight_layout()
-    rmse_path = os.path.join(SCRIPT_DIR, "heatmap_rmse.png")
-    fig_rmse.savefig(rmse_path, dpi=150, bbox_inches="tight")
-    plt.close(fig_rmse)
-    print(f"RMSE heatmap saved to {rmse_path}")
-
-    # ================================================================
-    # 3) R² heatmaps with BINNED OOD R²  (ID on top, OOD-binned below)
-    #    Same [0, 1] color clamping as plain R².
-    # ================================================================
-    ood_r2_binned = np.array([[results[m][p]["ood_r2_binned"] for p in prop_keys] for m in model_names])
-
-    fig_bin, (ax_id_bin, ax_ood_bin) = plt.subplots(2, 1, figsize=(fig_w, fig_h))
-
-    r2b_common = dict(
-        annot=True,
-        fmt=".3f",
-        xticklabels=prop_labels,
-        yticklabels=model_names,
-        linewidths=0.5,
-        linecolor="white",
-        annot_kws={"fontsize": 11},
-        cmap="YlGnBu",
-        vmin=0,
-        vmax=1,
-        cbar_kws={"label": "R²", "shrink": 0.8},
-    )
-
-    sns.heatmap(id_r2, ax=ax_id_bin, **r2b_common)
-    _axis_bottom(ax_id_bin, "Model", "ID Splits  (R²)")
-
-    sns.heatmap(ood_r2_binned, ax=ax_ood_bin, **r2b_common)
-    _axis_bottom(ax_ood_bin, "Model", "OOD Splits  (Binned R²)")
-
-    fig_bin.tight_layout()
-    bin_path = os.path.join(SCRIPT_DIR, "heatmap_r2_binned.png")
-    fig_bin.savefig(bin_path, dpi=150, bbox_inches="tight")
-    plt.close(fig_bin)
-    print(f"Binned-R² heatmap saved to {bin_path}")
+    print("\nHeatmaps are generated by reproduce/make_heatmaps.py.")
 
 
 # ===== Main =================================================================
@@ -1088,15 +963,16 @@ def _parse_args():
         ),
     )
     parser.add_argument(
-        "--heatmaps-only",
+        "--chemprop-smoke-test",
         action="store_true",
-        help=("Skip all training. Load results_incremental.json and " "regenerate summary tables + heatmap PNGs."),
+        help=("Run Chemprop in a very fast sanity-check mode " "(small model, small subsets, limited batches/epochs)."),
     )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = _parse_args()
+    CHEMPROP_SMOKE_TEST = args.chemprop_smoke_test
 
     # Set up logging to both terminal and a results file
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1107,41 +983,14 @@ if __name__ == "__main__":
 
     print(f"Working directory: {os.getcwd()}")
     print(f"Log file: {log_path}\n")
+    print(f"Using N_CPUS={N_CPUS}\n")
+    print(f"Chemprop smoke-test mode={CHEMPROP_SMOKE_TEST}\n")
 
     try:
-        if args.heatmaps_only:
-            # Just load saved results and regenerate plots
-            prev = _load_results_json()
-            if prev is None:
-                print(f"ERROR: {RESULTS_JSON} not found. Run training first.")
-                sys.exit(1)
-            # Print summary tables
-            for model_name in ALL_MODEL_NAMES:
-                print("\n" + "=" * 80)
-                print(f"  {model_name}")
-                print("=" * 80)
-                print(
-                    f"{'Endpoint':10s} {'ID R²':>8s}  {'OOD R²':>8s}  "
-                    f"{'OOD R²bin':>10s}  {'ID RMSE':>9s}  {'OOD RMSE':>9s}"
-                )
-                print("-" * 80)
-                for prop, label in ENDPOINTS:
-                    r = prev.get(model_name, {}).get(prop, {})
-                    if r:
-                        print(
-                            f"{label:10s} {r['id_r2']:8.4f}  {r['ood_r2']:8.4f}  "
-                            f"{r['ood_r2_binned']:10.4f}  "
-                            f"{r['id_rmse']:9.4f}  {r['ood_rmse']:9.4f}"
-                        )
-                    else:
-                        print(f"{label:10s}  -- missing --")
-                print("=" * 80)
-            plot_heatmaps(prev)
-        else:
-            ensure_qm9_property_csvs()  # Step 1
-            ensure_10k_splits()  # Step 2
-            generate_qm9_splits()  # Step 3
-            run_all_models(start_from=args.start_from)  # Step 4
+        ensure_qm9_property_csvs()  # Step 1
+        ensure_10k_splits()  # Step 2
+        generate_qm9_splits()  # Step 3
+        run_all_models(start_from=args.start_from)  # Step 4
     finally:
         log_file.close()
         sys.stdout = sys.__stdout__
