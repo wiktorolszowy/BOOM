@@ -745,3 +745,4 @@ experiments/chemprop/plot_results.ipynb
 *.npz
 *.png
 *.json
+!**/results_incremental.json
