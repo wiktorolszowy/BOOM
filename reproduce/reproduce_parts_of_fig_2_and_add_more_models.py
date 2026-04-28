@@ -491,6 +491,39 @@ def binned_r2(true, pred, train_median):
     return float(np.mean(r2_vals)) if r2_vals else float("nan")
 
 
+def corr_r2(true, pred):
+    """Square of Pearson correlation coefficient (ρ²).
+
+    This is sometimes reported as R² in the literature, but differs from the
+    coefficient of determination when predictions are biased.  ρ² is always
+    in [0, 1]; it ignores systematic offset or scale errors.
+    """
+    true = np.asarray(true)
+    pred = np.asarray(pred)
+    if len(true) < 2:
+        return float("nan")
+    rho = np.corrcoef(true, pred)[0, 1]
+    return float(rho**2)
+
+
+def binned_corr_r2(true, pred, train_median):
+    """Binned ρ²: same tail-split as binned_r2 but using corr_r2 per bin."""
+    true = np.asarray(true)
+    pred = np.asarray(pred)
+    lower = true < train_median
+    upper = ~lower
+    vals = []
+    for mask, name in [(lower, "lower"), (upper, "upper")]:
+        n = int(mask.sum())
+        if n >= 2:
+            val = corr_r2(true[mask], pred[mask])
+            vals.append(val)
+            print(f"    {name} tail ρ²: n={n}, ρ²={val:.4f}")
+        else:
+            print(f"    Warning: {name} tail has <2 samples, skipping ρ²")
+    return float(np.mean(vals)) if vals else float("nan")
+
+
 # ===== Model definitions ====================================================
 # Chemprop hyperparameters (MPNN, trained via PyTorch Lightning)
 CHEMPROP_PARAMS = {
@@ -853,12 +886,16 @@ def run_all_models(start_from=None):
             cp_id_r2 = r2_score(cp_id_true, cp_id_pred)
             cp_ood_r2 = r2_score(cp_ood_true, cp_ood_pred)
             cp_ood_r2_binned = binned_r2(cp_ood_true, cp_ood_pred, train_med)
+            cp_id_r2_corr = corr_r2(cp_id_true, cp_id_pred)
+            cp_ood_r2_corr_binned = binned_corr_r2(cp_ood_true, cp_ood_pred, train_med)
             cp_id_rmse = root_mean_squared_error(cp_id_true, cp_id_pred)
             cp_ood_rmse = root_mean_squared_error(cp_ood_true, cp_ood_pred)
             results["Chemprop"][prop] = {
                 "id_r2": cp_id_r2,
                 "ood_r2": cp_ood_r2,
                 "ood_r2_binned": cp_ood_r2_binned,
+                "id_r2_corr": cp_id_r2_corr,
+                "ood_r2_corr_binned": cp_ood_r2_corr_binned,
                 "id_rmse": cp_id_rmse,
                 "ood_rmse": cp_ood_rmse,
             }
@@ -867,6 +904,8 @@ def run_all_models(start_from=None):
             print(f"    ID  R²        = {cp_id_r2:.4f}")
             print(f"    OOD R² (plain)= {cp_ood_r2:.4f}")
             print(f"    OOD R² binned = {cp_ood_r2_binned:.4f}")
+            print(f"    ID  ρ²        = {cp_id_r2_corr:.4f}")
+            print(f"    OOD ρ² binned = {cp_ood_r2_corr_binned:.4f}")
             print(f"    ID  RMSE      = {cp_id_rmse:.4f}")
             print(f"    OOD RMSE      = {cp_ood_rmse:.4f}")
             print(f"    ({elapsed:.0f}s)")
@@ -908,6 +947,8 @@ def run_all_models(start_from=None):
                 id_r2 = r2_score(id_true, id_pred)
                 ood_r2_plain = r2_score(ood_true, ood_pred)
                 ood_r2_binned = binned_r2(ood_true, ood_pred, train_med)
+                id_r2_corr = corr_r2(id_true, id_pred)
+                ood_r2_corr_binned = binned_corr_r2(ood_true, ood_pred, train_med)
                 id_rmse = root_mean_squared_error(id_true, id_pred)
                 ood_rmse = root_mean_squared_error(ood_true, ood_pred)
 
@@ -915,6 +956,8 @@ def run_all_models(start_from=None):
                     "id_r2": id_r2,
                     "ood_r2": ood_r2_plain,
                     "ood_r2_binned": ood_r2_binned,
+                    "id_r2_corr": id_r2_corr,
+                    "ood_r2_corr_binned": ood_r2_corr_binned,
                     "id_rmse": id_rmse,
                     "ood_rmse": ood_rmse,
                 }
@@ -931,6 +974,8 @@ def run_all_models(start_from=None):
                 print(f"    ID  R²        = {id_r2:.4f}")
                 print(f"    OOD R² (plain)= {ood_r2_plain:.4f}")
                 print(f"    OOD R² binned = {ood_r2_binned:.4f}")
+                print(f"    ID  ρ²        = {id_r2_corr:.4f}")
+                print(f"    OOD ρ² binned = {ood_r2_corr_binned:.4f}")
                 print(f"    ID  RMSE      = {id_rmse:.4f}")
                 print(f"    OOD RMSE      = {ood_rmse:.4f}")
                 print(f"    ({elapsed:.0f}s)")

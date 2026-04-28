@@ -155,3 +155,42 @@ bin_path = os.path.join(SCRIPT_DIR, "heatmap_r2_binned.png")
 fig_bin.savefig(bin_path, dpi=150, bbox_inches="tight")
 plt.close(fig_bin)
 print(f"Binned-R² heatmap saved to {bin_path}")
+
+# 4) ρ² heatmaps (correlation coefficient squared, as sometimes misused as R²)
+# Only generated if id_r2_corr / ood_r2_corr keys are present in results.
+has_corr = all(
+    "id_r2_corr" in results[m][p] and "ood_r2_corr_binned" in results[m][p]
+    for m in model_names
+    for p in prop_keys
+    if p in results[m]
+)
+if has_corr:
+    id_r2_corr = np.array([[results[m][p]["id_r2_corr"] for p in prop_keys] for m in model_names])
+    ood_r2_corr_binned = np.array([[results[m][p]["ood_r2_corr_binned"] for p in prop_keys] for m in model_names])
+
+    fig_corr, (ax_id_corr, ax_ood_corr) = plt.subplots(2, 1, figsize=(fig_w, fig_h), gridspec_kw={"hspace": 0.32})
+    r2c_common = dict(
+        annot=True,
+        fmt=".2f",
+        xticklabels=prop_labels,
+        yticklabels=model_names,
+        linewidths=0.2,
+        linecolor="white",
+        annot_kws={"fontsize": 9},
+        cmap="YlGnBu",
+        vmin=0,
+        vmax=1,
+        cbar_kws={"label": "ρ²", "shrink": 0.8},
+    )
+    sns.heatmap(id_r2_corr, ax=ax_id_corr, **r2c_common)
+    _axis_bottom(ax_id_corr, "Model", "ID Splits  (ρ²  =  corr. coeff. squared)")
+    sns.heatmap(ood_r2_corr_binned, ax=ax_ood_corr, **r2c_common)
+    _axis_bottom(ax_ood_corr, "Model", "OOD Splits  (Binned ρ²)")
+    corr_path = os.path.join(SCRIPT_DIR, "heatmap_r2_corr.png")
+    fig_corr.savefig(corr_path, dpi=150, bbox_inches="tight")
+    plt.close(fig_corr)
+    print(f"ρ² heatmap saved to {corr_path}")
+else:
+    print(
+        "ρ² heatmap skipped — re-run reproduce_parts_of_fig_2_and_add_more_models.py to populate id_r2_corr/ood_r2_corr keys."
+    )
