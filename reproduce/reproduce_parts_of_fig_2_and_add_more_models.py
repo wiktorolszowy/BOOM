@@ -80,6 +80,56 @@ class Tee:
             s.flush()
 
 
+# ===== Timing / memory helpers ==============================================
+
+
+def _ts():
+    """Current wall-clock time as [HH:MM:SS]."""
+    return datetime.datetime.now().strftime("[%H:%M:%S]")
+
+
+def _elapsed(t0):
+    """Human-readable elapsed time since *t0* (from time.time())."""
+    secs = time.time() - t0
+    if secs < 60:
+        return f"{secs:.1f}s"
+    m, s = divmod(int(secs), 60)
+    if m < 60:
+        return f"{m}m{s:02d}s"
+    h, m = divmod(m, 60)
+    return f"{h}h{m:02d}m{s:02d}s"
+
+
+def _pred_range_str(true, pred):
+    """One-line summary of prediction range vs. true range for sanity checking."""
+    return f"true [{true.min():.4g}, {true.max():.4g}]  " f"pred [{pred.min():.4g}, {pred.max():.4g}]"
+
+
+def _flag_metrics(id_r2, ood_r2_binned):
+    """Return a warning string if metrics look extreme or invalid."""
+    flags = []
+    for name, val in [("ID R²", id_r2), ("OOD R²", ood_r2_binned)]:
+        import math
+
+        if math.isnan(val) or math.isinf(val):
+            flags.append(f"{name}=NaN/Inf")
+        elif val < -100:
+            flags.append(f"{name}={val:.1f}")
+    return f"  [!] Extreme metrics: {', '.join(flags)}" if flags else ""
+
+
+def _mem_mb():
+    """Peak RSS memory in MB (Linux kB→MB; macOS B→MB). Returns '-' on error."""
+    try:
+        import resource
+
+        kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        mb = kb / 1e3 if sys.platform != "darwin" else kb / 1e6
+        return f"{mb:.0f} MB"
+    except Exception:
+        return "-"
+
+
 # ===== Configuration ========================================================
 DEEPCHEM_S3_URL = "https://deepchemdata.s3-us-west-1.amazonaws.com/datasets/gdb9.tar.gz"
 QM9_TAR = os.path.join(DATA_DIR, "gdb9.tar.gz")
@@ -251,17 +301,24 @@ def _featurize_group(smiles_list, group_name=None):
     return cache, clean_names
 
 
-def _build_split_features(dataset, clean_cache, train_mean, train_std):
+def _build_split_features(dataset, clean_cache, train_mean, train_std, split_name=""):
     """Assemble feature matrix + normalised labels from cached *clean* features.
 
     No per-split postprocessing — that was already done globally in
     ``_featurize_group`` so every split shares the same feature columns.
+    Logs a warning when molecules are dropped due to cache misses.
     """
     rows, labels = [], []
+    n_missing = 0
     for smi, target in dataset:
         if smi in clean_cache:
             rows.append(clean_cache[smi])
             labels.append(target)
+        else:
+            n_missing += 1
+    if n_missing:
+        pct = 100 * n_missing / max(len(dataset), 1)
+        print(f"    [!] {split_name}: {n_missing}/{len(dataset)} molecules dropped (cache miss, {pct:.1f}%)")
     if not rows:
         return np.empty((0, 0)), np.empty(0)
     features = np.vstack(rows)
@@ -280,12 +337,13 @@ def _slice_dataset(dataset, limit):
 # ===== Step 1: Ensure QM9 per-property CSVs exist ==========================
 def ensure_qm9_property_csvs():
     """Download QM9 from deepchem S3 and create per-property CSVs."""
+    t0_step = time.time()
     needed = [p for p in QM9_PROPS if not os.path.exists(os.path.join(DATA_DIR, f"qm9_{p}.csv"))]
     if not needed:
-        print("[Step 1] All QM9 per-property CSVs already exist – skipping.")
+        print(f"[Step 1] {_ts()} All QM9 per-property CSVs already exist – skipping.")
         return
 
-    print(f"[Step 1] Need CSVs for: {needed}")
+    print(f"[Step 1] {_ts()} Need CSVs for: {needed}")
 
     # 1a. Download tar if absent
     if not os.path.exists(QM9_TAR):
@@ -336,16 +394,18 @@ def ensure_qm9_property_csvs():
                     f.write(f"{smi},{row[col_idx]}\n")
                     n_written += 1
         print(f"  Wrote {out_path} ({n_written} molecules)")
+    print(f"[Step 1] Done ({_elapsed(t0_step)})")  # noqa: F821 (t0_step defined above)
 
 
 # ===== Step 2: Ensure 10k split CSV exists ==================================
 def ensure_10k_splits():
+    t0_step = time.time()
     if os.path.exists(TENK_SPLITS_FILE):
-        print("[Step 2] 10k splits CSV already exists – skipping.")
+        print(f"[Step 2] {_ts()} 10k splits CSV already exists – skipping.")
         return
-    print("[Step 2] Generating 10k OOD splits ...")
+    print(f"[Step 2] {_ts()} Generating 10k OOD splits ...")
     generate_splits_10k(DATA_DIR, "10k_data_with_ood_splits.csv")
-    print(f"  Wrote {TENK_SPLITS_FILE}")
+    print(f"  Wrote {TENK_SPLITS_FILE} ({_elapsed(t0_step)})")
 
 
 # ===== Step 3: Generate QM9 OOD splits with KDE ============================
@@ -354,11 +414,12 @@ def generate_qm9_splits():
     Re-implementation of prepare_splits_qm9 with tqdm progress bars on
     the heavy loops (InChI computation and KDE scoring).
     """
+    t0_step3 = time.time()
     if os.path.exists(QM9_SPLITS_FILE):
-        print("[Step 3] QM9 splits CSV already exists – skipping.")
+        print(f"[Step 3] {_ts()} QM9 splits CSV already exists – skipping.")
         return
 
-    print("[Step 3] Generating QM9 OOD splits (KDE-based) ...")
+    print(f"[Step 3] {_ts()} Generating QM9 OOD splits (KDE-based) ...")
     num_ood_samples = 10000
 
     property_files = [os.path.join(DATA_DIR, f"qm9_{p}.csv") for p in QM9_PROPS]
@@ -463,7 +524,7 @@ def generate_qm9_splits():
             parts.append(dataframe[smi]["inchi"])
             f.write(",".join(parts) + "\n")
 
-    print(f"  Wrote {QM9_SPLITS_FILE} ({len(dataframe)} molecules)")
+    print(f"  Wrote {QM9_SPLITS_FILE} ({len(dataframe)} molecules, {_elapsed(t0_step3)} total)")
 
 
 # ===== Step 4: Train models and report metrics ==============================
@@ -552,7 +613,7 @@ DESCRIPTOR_MODELS = {
         l1_ratio=[0.1, 0.5, 0.9, 1.0],
         alphas=30,
         cv=3,
-        max_iter=2000,
+        max_iter=10000,
         selection="random",
         n_jobs=N_CPUS,
         random_state=42,
@@ -585,6 +646,7 @@ def _train_chemprop(train_ds, id_ds, ood_ds):
     torch.use_deterministic_algorithms(True, warn_only=True)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+    t_cp = time.time()
     p = CHEMPROP_PARAMS.copy()
 
     def _make_datapoints(smiles_dataset):
@@ -597,9 +659,11 @@ def _train_chemprop(train_ds, id_ds, ood_ds):
                 ys.append(float(target))
         return dps, np.array(ys, dtype=np.float64)
 
+    print(f"    {_ts()} Building datapoints (SMILES → molecule objects) ...")
     train_dps, _ = _make_datapoints(train_ds)
     id_dps, id_true = _make_datapoints(id_ds)
     ood_dps, ood_true = _make_datapoints(ood_ds)
+    print(f"    Datapoints: train={len(train_dps)}, id={len(id_dps)}, ood={len(ood_dps)}  ({_elapsed(t_cp)})")
 
     if CHEMPROP_SMOKE_TEST:
         # Tiny model + tiny subsets to validate pipeline wiring quickly.
@@ -708,6 +772,8 @@ def _train_chemprop(train_ds, id_ds, ood_ds):
     else:
         accelerator = "cpu"
     print(f"    Lightning accelerator: {accelerator}")
+    t_fit = time.time()
+    print(f"    {_ts()} Starting trainer.fit ...")
 
     trainer = pl.Trainer(
         logger=False,
@@ -723,15 +789,18 @@ def _train_chemprop(train_ds, id_ds, ood_ds):
     )
     trainer.fit(mpnn, train_loader, val_loader)
     stopped_epoch = trainer.current_epoch + 1
-    print(f"    Stopped at epoch {stopped_epoch}/{p['max_epochs']}")
+    print(f"    Stopped at epoch {stopped_epoch}/{p['max_epochs']}  (training: {_elapsed(t_fit)})")
 
     # Predict — output_transform automatically unscales to original target scale
+    t_pred = time.time()
+    print(f"    {_ts()} Running predictions ...")
     with torch.inference_mode():
         id_preds = trainer.predict(mpnn, id_loader)
         ood_preds = trainer.predict(mpnn, ood_loader)
 
     id_pred = torch.cat(id_preds, dim=0).detach().cpu().numpy().flatten()
     ood_pred = torch.cat(ood_preds, dim=0).detach().cpu().numpy().flatten()
+    print(f"    Predictions done  (inference: {_elapsed(t_pred)}, total chemprop: {_elapsed(t_cp)})")
 
     # output_transform unscales predictions to original target scale.
     return id_true, id_pred, ood_true, ood_pred
@@ -761,7 +830,8 @@ def _load_results_json():
 
 
 def run_all_models(start_from=None):
-    print("\n[Step 4] Training models for each endpoint ...")
+    t_total = time.time()
+    print(f"\n[Step 4] {_ts()} Training models for each endpoint ...")
     print(f"  Models: {', '.join(ALL_MODEL_NAMES)}\n")
 
     # Group endpoints by underlying dataset so each molecule is featurised once
@@ -791,10 +861,14 @@ def run_all_models(start_from=None):
         unique_smiles = sorted(unique_smiles_set)
 
         # ---- featurise ALL unique molecules once (with disk cache) ----
-        print(f"[{group_name}] Featurising {len(unique_smiles)} unique molecules ...")
+        print(f"[{group_name}] {_ts()} Featurising {len(unique_smiles)} unique molecules ...")
         t0 = time.time()
         clean_cache, _feat_names = _featurize_group(unique_smiles, group_name=group_name)
-        print(f"  Done in {time.time()-t0:.1f}s " f"({len(clean_cache)}/{len(unique_smiles)} valid)\n")
+        print(
+            f"  Done in {_elapsed(t0)} "
+            f"({len(clean_cache)}/{len(unique_smiles)} valid, "
+            f"n_features={len(_feat_names)}, peak mem: {_mem_mb()})\n"
+        )
 
         # ---- train models per endpoint using cached features ----
         for prop, label in eps:
@@ -806,7 +880,7 @@ def run_all_models(start_from=None):
                     print(f"--- {label} --- SKIPPED (--start-from {start_from})")
                     continue
             else:
-                print(f"--- {label} ---")
+                print(f"\n--- {label} ---  {_ts()}")
             t0_ep = time.time()
 
             train_ds = all_datasets[(prop, "train")]
@@ -823,10 +897,21 @@ def run_all_models(start_from=None):
             train_mean = float(train_targets.mean())
             train_std = float(train_targets.std())
 
+            # Log target statistics; guard against zero std (would cause NaN in normalisation)
+            print(
+                f"  Target stats: mean={train_mean:.4g}, std={train_std:.4g}, "
+                f"min={train_targets.min():.4g}, max={train_targets.max():.4g}"
+            )
+            if train_std < 1e-10:
+                print(f"  [!] train_std ~ 0 for {prop!r} — normalisation will produce NaN/Inf, skipping endpoint")
+                continue
+
+            t0_feat = time.time()
             print(f"  Building features from cache " f"(train={len(train_ds)}, id={len(id_ds)}, ood={len(ood_ds)}) ...")
-            train_X, train_y = _build_split_features(train_ds, clean_cache, train_mean, train_std)
-            id_X, id_y = _build_split_features(id_ds, clean_cache, train_mean, train_std)
-            ood_X, ood_y = _build_split_features(ood_ds, clean_cache, train_mean, train_std)
+            train_X, train_y = _build_split_features(train_ds, clean_cache, train_mean, train_std, "train")
+            id_X, id_y = _build_split_features(id_ds, clean_cache, train_mean, train_std, "id")
+            ood_X, ood_y = _build_split_features(ood_ds, clean_cache, train_mean, train_std, "ood")
+            print(f"  Effective sizes after cache lookup: train={len(train_y)}, id={len(id_y)}, ood={len(ood_y)}")
 
             assert train_X.shape[1] == id_X.shape[1] == ood_X.shape[1], (
                 f"Feature dim mismatch: train={train_X.shape[1]}, " f"id={id_X.shape[1]}, ood={ood_X.shape[1]}"
@@ -870,7 +955,8 @@ def run_all_models(start_from=None):
                 f"  Poly features (top-{k_actual}): "
                 f"{n_feats} → {k_actual} → "
                 f"{train_X_poly.shape[1]} "
-                f"({poly_mem_gb:.1f} GB)"
+                f"({poly_mem_gb:.1f} GB train matrix, "
+                f"feature-build: {_elapsed(t0_feat)}, peak mem: {_mem_mb()})"
             )
 
             # XGB-linear: 90/10 validation split for early stopping
@@ -882,7 +968,7 @@ def run_all_models(start_from=None):
 
             # ---- Chemprop (MPNN): operates on SMILES directly ----
             t0 = time.time()
-            print("  Training Chemprop (MPNN) ...")
+            print(f"  {_ts()} Training Chemprop (MPNN) ...")
             cp_id_true, cp_id_pred, cp_ood_true, cp_ood_pred = _train_chemprop(
                 train_ds,
                 id_ds,
@@ -902,7 +988,8 @@ def run_all_models(start_from=None):
                 "id_rmse": cp_id_rmse,
                 "ood_rmse": cp_ood_rmse,
             }
-            elapsed = time.time() - t0
+            print(f"    Pred range:   ID  {_pred_range_str(cp_id_true, cp_id_pred)}")
+            print(f"    Pred range:   OOD {_pred_range_str(cp_ood_true, cp_ood_pred)}")
             print(f"    Train median  = {train_med:.4f}")
             print(f"    ID  R²        = {cp_id_r2:.4f}")
             print(f"    OOD R² binned = {cp_ood_r2_binned:.4f}")
@@ -910,12 +997,15 @@ def run_all_models(start_from=None):
             print(f"    OOD ρ² binned = {cp_ood_r2_corr_binned:.4f}")
             print(f"    ID  RMSE      = {cp_id_rmse:.4f}")
             print(f"    OOD RMSE      = {cp_ood_rmse:.4f}")
-            print(f"    ({elapsed:.0f}s)")
+            _flag = _flag_metrics(cp_id_r2, cp_ood_r2_binned)
+            if _flag:
+                print(_flag)
+            print(f"    ({_elapsed(t0)}, peak mem: {_mem_mb()})")
 
             # ---- Descriptor-based models ----
             for model_name, model_factory in DESCRIPTOR_MODELS.items():
                 t0 = time.time()
-                print(f"  Training {model_name} ...")
+                print(f"  {_ts()} Training {model_name} ...")
                 model = model_factory()
 
                 if model_name == "ElasticNet":
@@ -923,11 +1013,25 @@ def run_all_models(start_from=None):
                     # Limit CV parallelism to avoid OOM: each worker copies
                     # the poly matrix (~3× for coordinate-descent internals).
                     _mem_per_worker = poly_mem_gb * 3
-                    _safe_jobs = max(1, int(24.0 / max(_mem_per_worker, 0.1)))
+                    try:
+                        import psutil as _psutil
+
+                        _avail_gb = _psutil.virtual_memory().available / 1e9
+                    except Exception:
+                        _avail_gb = 24.0  # conservative fallback
+                    _safe_jobs = max(1, int(_avail_gb * 0.75 / max(_mem_per_worker, 0.1)))
                     model.n_jobs = min(N_CPUS, _safe_jobs)
                     if model.n_jobs < N_CPUS:
                         print(f"    (limiting to {model.n_jobs} CV workers " f"to fit in RAM)")
-                    model.fit(train_X_poly, train_y)
+                    import warnings as _warnings
+                    from sklearn.exceptions import ConvergenceWarning as _CW
+
+                    with _warnings.catch_warnings(record=True) as _caught:
+                        _warnings.simplefilter("always", _CW)
+                        model.fit(train_X_poly, train_y)
+                    _cw_count = sum(1 for w in _caught if issubclass(w.category, _CW))
+                    if _cw_count:
+                        print(f"    [!] ElasticNet: {_cw_count} ConvergenceWarning(s) — consider increasing max_iter")
                     id_pred = model.predict(id_X_poly) * train_std + train_mean
                     ood_pred = model.predict(ood_X_poly) * train_std + train_mean
                 elif model_name == "XGB-linear":
@@ -961,7 +1065,6 @@ def run_all_models(start_from=None):
                     "id_rmse": id_rmse,
                     "ood_rmse": ood_rmse,
                 }
-                elapsed = time.time() - t0
                 if hasattr(model, "alpha_"):
                     print(f"    Best alpha={model.alpha_:.4g}, " f"l1_ratio={model.l1_ratio_:.2f}")
                 if hasattr(model, "best_iteration"):
@@ -970,6 +1073,8 @@ def run_all_models(start_from=None):
                         f"{model.best_iteration} / "
                         f"{model.get_params()['n_estimators']}"
                     )
+                print(f"    Pred range:   ID  {_pred_range_str(id_true, id_pred)}")
+                print(f"    Pred range:   OOD {_pred_range_str(ood_true, ood_pred)}")
                 print(f"    Train median  = {train_med:.4f}")
                 print(f"    ID  R²        = {id_r2:.4f}")
                 print(f"    OOD R² binned = {ood_r2_binned:.4f}")
@@ -977,9 +1082,12 @@ def run_all_models(start_from=None):
                 print(f"    OOD ρ² binned = {ood_r2_corr_binned:.4f}")
                 print(f"    ID  RMSE      = {id_rmse:.4f}")
                 print(f"    OOD RMSE      = {ood_rmse:.4f}")
-                print(f"    ({elapsed:.0f}s)")
+                _flag = _flag_metrics(id_r2, ood_r2_binned)
+                if _flag:
+                    print(_flag)
+                print(f"    ({_elapsed(t0)}, peak mem: {_mem_mb()})")
 
-            print(f"  Endpoint total: {time.time()-t0_ep:.0f}s\n")
+            print(f"  Endpoint total: {_elapsed(t0_ep)}  {_ts()}\n")
             _save_results_json(results)  # persist after each endpoint
 
     # Check that all endpoints are covered before final summary
@@ -992,7 +1100,8 @@ def run_all_models(start_from=None):
         print("  Missing:", [(m, p) for m, p in missing[:10]], "..." if len(missing) > 10 else "")
         return
 
-    print("\nDone. Run reproduce/make_heatmaps.py to generate heatmaps.")
+    print(f"\nDone. Total training time: {_elapsed(t_total)}")
+    print("Run reproduce/make_heatmaps.py to generate heatmaps.")
 
 
 # ===== Main =================================================================
@@ -1036,10 +1145,37 @@ if __name__ == "__main__":
     sys.stdout = Tee(sys.__stdout__, log_file)
     sys.stderr = Tee(sys.__stderr__, log_file)
 
+    t_script_start = time.time()
+    print(f"Started: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Working directory: {os.getcwd()}")
-    print(f"Log file: {log_path}\n")
-    print(f"Using N_CPUS={N_CPUS}\n")
-    print(f"Chemprop smoke-test mode={CHEMPROP_SMOKE_TEST}\n")
+    print(f"Log file: {log_path}")
+    print(f"N_CPUS={N_CPUS}  smoke-test={CHEMPROP_SMOKE_TEST}")
+
+    # System / package info
+    import platform
+
+    print(f"Python: {sys.version.split()[0]}  Platform: {platform.platform()}")
+    try:
+        import torch as _t
+        import lightning as _l
+        import chemprop as _c
+        import sklearn as _sk
+        import xgboost as _xgb
+
+        print(
+            f"Versions — torch={_t.__version__}  lightning={_l.__version__}"
+            f"  chemprop={_c.__version__}  sklearn={_sk.__version__}  xgboost={_xgb.__version__}"
+        )
+    except Exception as _e:
+        print(f"  (version check skipped: {_e})")
+    try:
+        import psutil
+
+        _ram = psutil.virtual_memory()
+        print(f"RAM: {_ram.total/1e9:.1f} GB total, {_ram.available/1e9:.1f} GB available")
+    except ImportError:
+        pass
+    print()
 
     try:
         ensure_qm9_property_csvs()  # Step 1
@@ -1047,7 +1183,9 @@ if __name__ == "__main__":
         generate_qm9_splits()  # Step 3
         run_all_models(start_from=args.start_from)  # Step 4
     finally:
+        total_time = _elapsed(t_script_start)
         log_file.close()
         sys.stdout = sys.__stdout__
         sys.stderr = sys.__stderr__
-        print(f"\nResults saved to: {log_path}")
+        print(f"\nTotal wall-clock time: {total_time}")
+        print(f"Results saved to: {log_path}")
