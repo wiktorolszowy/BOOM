@@ -545,6 +545,7 @@ DESCRIPTOR_MODELS = {
         n_estimators=500,
         max_features="sqrt",
         n_jobs=N_CPUS,
+        random_state=42,
         verbose=0,
     ),
     "ElasticNet": lambda: ElasticNetCV(
@@ -580,6 +581,10 @@ def _train_chemprop(train_ds, id_ds, ood_ds):
     """Train a chemprop MPNN on SMILES and return (id_pred, ood_pred) in
     original scale.  Uses PyTorch Lightning with CPU, early stopping,
     and the RegressionFFN output transform for automatic unscaling."""
+    pl.seed_everything(42, workers=True)
+    torch.use_deterministic_algorithms(True, warn_only=True)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
     p = CHEMPROP_PARAMS.copy()
 
     def _make_datapoints(smiles_dataset):
@@ -638,7 +643,7 @@ def _train_chemprop(train_ds, id_ds, ood_ds):
     scaler = train_dataset.normalize_targets()
     val_dataset.normalize_targets(scaler)
 
-    _nw = 0 if CHEMPROP_SMOKE_TEST else min(N_CPUS - 1, 15)  # dataloader workers
+    _nw = 0  # num_workers=0 for fully deterministic training (parallel workers cause non-deterministic batch ordering)
     train_loader = chemprop_data.build_dataloader(
         train_dataset,
         batch_size=p["batch_size"],
