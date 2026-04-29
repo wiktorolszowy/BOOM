@@ -1,27 +1,30 @@
 #!/usr/bin/env python
 """
-Reproduce RF R² from BOOM Figure 2 for all 10 endpoints
+Reproduce Figure 2 results from BOOM for all 10 endpoints
 (Density, HoF, alpha, cv, gap, homo, lumo, mu, r2, zpve).
-Also adds Chemprop (MPNN) and Elastic Net (with degree-2 interaction
-features).
+Models: Random Forest and Chemprop (MPNN) from the paper, plus
+Elastic Net (degree-2 interaction features) as an additional baseline.
 
 Self-contained: handles data download, CSV preparation, OOD split
 generation (with progress output), feature caching, and model
 training/evaluation.
 
 Run from:  repo root
-Usage:     python3 reproduce_parts_of_fig_2_and_add_more_models.py
+Usage:     python3 reproduce_parts_of_fig_2_and_add_elastic_net.py
 """
 
 import argparse
 import datetime
 import json
+import math
 import os
+import platform
 import random
 import subprocess
 import sys
 import tarfile
 import time
+import warnings
 from multiprocessing import Pool
 
 import lightning as pl
@@ -34,6 +37,7 @@ from lightning.pytorch.callbacks import EarlyStopping
 from rdkit import Chem, RDLogger
 from rdkit.Chem import Descriptors, MolFromSmiles, MolToInchi
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.exceptions import ConvergenceWarning
 from sklearn.feature_selection import SelectKBest, f_regression
 from sklearn.linear_model import ElasticNetCV
 from sklearn.metrics import r2_score, root_mean_squared_error
@@ -108,8 +112,6 @@ def _flag_metrics(id_r2, ood_r2_binned):
     """Return a warning string if metrics look extreme or invalid."""
     flags = []
     for name, val in [("ID R²", id_r2), ("OOD R²", ood_r2_binned)]:
-        import math
-
         if math.isnan(val) or math.isinf(val):
             flags.append(f"{name}=NaN/Inf")
         elif val < -100:
@@ -138,17 +140,6 @@ QM9_CSV = os.path.join(DATA_DIR, "gdb9.sdf.csv")
 # 8 QM9 properties — names must be lowercase so the splits CSV columns
 # match what _load_qm9_data expects (it looks for "qm9_" + target.lower()).
 QM9_PROPS = ["mu", "alpha", "homo", "lumo", "gap", "r2", "zpve", "cv"]
-# Mapping from lowercase prop name to the column name in gdb9.sdf.csv
-QM9_CSV_COL = {
-    "mu": "mu",
-    "alpha": "alpha",
-    "homo": "homo",
-    "lumo": "lumo",
-    "gap": "gap",
-    "r2": "r2",
-    "zpve": "zpve",
-    "cv": "cv",
-}
 QM9_SPLITS_FILE = os.path.join(DATA_DIR, "qm9_data_with_ood_splits_with_inchi.csv")
 TENK_SPLITS_FILE = os.path.join(DATA_DIR, "10k_data_with_ood_splits.csv")
 
@@ -363,8 +354,6 @@ def ensure_qm9_property_csvs():
 
     # 1c. Build SMILES from SDF (the CSV has no SMILES column)
     print("  Parsing SMILES from SDF (this takes ~1 min for 132k molecules) ...")
-    from rdkit import Chem
-
     supplier = Chem.SDMolSupplier(QM9_SDF, removeHs=True)
     smiles_list = []
     for mol in tqdm(supplier, desc="  SDF→SMILES", unit="mol"):
@@ -382,8 +371,7 @@ def ensure_qm9_property_csvs():
 
     # 1e. Write per-property CSVs
     for prop in needed:
-        col_name = QM9_CSV_COL[prop]
-        col_idx = csv_header.index(col_name)
+        col_idx = csv_header.index(prop)
         out_path = os.path.join(DATA_DIR, f"qm9_{prop}.csv")
         n_written = 0
         with open(out_path, "w") as f:
@@ -475,7 +463,7 @@ def generate_qm9_splits():
         scores = kde.evaluate(vals_1d)
         print(f"  KDE fit+score done in {time.time()-t0:.1f}s")
 
-        # 3d. Select OOD (lowest-density tail)
+        # 3c. Select OOD (lowest-density tail)
         ood_indices = set(np.argpartition(scores, num_ood_samples)[:num_ood_samples])
 
         for i, smi in enumerate(smiles_list):
@@ -1004,13 +992,10 @@ def run_all_models(start_from=None):
                     model.n_jobs = min(N_CPUS, _safe_jobs)
                     if model.n_jobs < N_CPUS:
                         print(f"    (limiting to {model.n_jobs} CV workers " f"to fit in RAM)")
-                    import warnings as _warnings
-                    from sklearn.exceptions import ConvergenceWarning as _CW
-
-                    with _warnings.catch_warnings(record=True) as _caught:
-                        _warnings.simplefilter("always", _CW)
+                    with warnings.catch_warnings(record=True) as _caught:
+                        warnings.simplefilter("always", ConvergenceWarning)
                         model.fit(train_X_poly, train_y)
-                    _cw_count = sum(1 for w in _caught if issubclass(w.category, _CW))
+                    _cw_count = sum(1 for w in _caught if issubclass(w.category, ConvergenceWarning))
                     if _cw_count:
                         print(f"    [!] ElasticNet: {_cw_count} ConvergenceWarning(s) — consider increasing max_iter")
                     id_pred = model.predict(id_X_poly) * train_std + train_mean
@@ -1105,7 +1090,9 @@ if __name__ == "__main__":
 
     # Set up logging to both terminal and a results file
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_path = os.path.join(SCRIPT_DIR, f"run_all_r2_{timestamp}.log")
+    logs_dir = os.path.join(SCRIPT_DIR, "logs")
+    os.makedirs(logs_dir, exist_ok=True)
+    log_path = os.path.join(logs_dir, f"run_all_r2_{timestamp}.log")
     log_file = open(log_path, "w")
     sys.stdout = Tee(sys.__stdout__, log_file)
     sys.stderr = Tee(sys.__stderr__, log_file)
@@ -1117,8 +1104,6 @@ if __name__ == "__main__":
     print(f"N_CPUS={N_CPUS}  smoke-test={CHEMPROP_SMOKE_TEST}")
 
     # System / package info
-    import platform
-
     print(f"Python: {sys.version.split()[0]}  Platform: {platform.platform()}")
     try:
         import torch as _t

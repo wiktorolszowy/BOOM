@@ -1,9 +1,11 @@
 # BOOM
 Data preparation utilities and experiments for out-of-distribution predictions of molecule properties
 
+To reproduce the paper's results, see [`reproduce/reproduce_results_from_paper.md`](reproduce/reproduce_results_from_paper.md).
+
 ## Overview
 
-Data-driven molecule discovery leverages machine learning (ML) and generative modeling to filter and design novel molecules. Discovering novel molecules requires accurate out-of-distribution (OOD) predictions, but ML models struggle to generalize OOD. Currently, no systematic benchmarks exist for molecular OOD prediction tasks. We present BOOM, benchmarks for out-of-distribution molecular property predictions: a benchmark study of property-based OOD models for common molecular property prediction. We evaluate over 140 model-task combinations to benchmark deep learning models on OOD performance. Overall, we find no existing models achieve strong OOD generalization across all tasks: even the top model exhibited an average OOD error 3x larger than in-distribution. Current chemical foundation models do not show strong OOD extrapolation, while models with high inductive bias can perform well on OOD tasks with simple, specific properties. We perform extensive ablation experiments, highlighting how data generation, pre-training, hyperparameter optimization, model architecture, and molecular representation impact OOD performance. Developing models with strong OOD generalization is a new frontier challenge in chemical ML. 
+Data-driven molecule discovery leverages machine learning (ML) and generative modeling to filter and design novel molecules. Discovering novel molecules requires accurate out-of-distribution (OOD) predictions, but ML models struggle to generalize OOD. Currently, no systematic benchmarks exist for molecular OOD prediction tasks. We present BOOM, benchmarks for out-of-distribution molecular property predictions: a benchmark study of property-based OOD models for common molecular property prediction. We evaluate over 140 model-task combinations to benchmark deep learning models on OOD performance. Overall, we find no existing models achieve strong OOD generalization across all tasks: even the top model exhibited an average OOD error 3x larger than in-distribution. Current chemical foundation models do not show strong OOD extrapolation, while models with high inductive bias can perform well on OOD tasks with simple, specific properties. We perform extensive ablation experiments, highlighting how data generation, pre-training, hyperparameter optimization, model architecture, and molecular representation impact OOD performance. Developing models with strong OOD generalization is a new frontier challenge in chemical ML.
 
 # Installation
 ## Requirements
@@ -20,17 +22,17 @@ The base requirements are:
 
 
 ## From local source
-Clone the repository and install the package in editable mode. 
-```bash 
-git clone 
+Clone the repository and install the package in editable mode.
+```bash
+git clone
 pip install -e .
 ```
 
 # Data Preparation
-The data should be already in the repo and should not be processed individually. 
-We set the random seed, but that may not guarantee the same results. So highly recommended to **not** run the data preparation code again. 
+The data should be already in the repo and should not be processed individually.
+We set the random seed, but that may not guarantee the same results. So highly recommended to **not** run the data preparation code again.
 
-If you still want to run the data preparation code, you can run the following command for the 10k dataset. 
+If you still want to run the data preparation code, you can run the following command for the 10k dataset.
 ```python
 from boom.data.prepare_splits_10k import prepare_splits
 prepare_splits()
@@ -49,7 +51,7 @@ The generic SMILES dataset class lets you load a particular property and split:
 ```python
 from boom.datasets.SMILESDataset import SMILESDataset
 
-data = SMILESDataset(property=<property>, 
+data = SMILESDataset(property=<property>,
                      split=<split>)
 ```
 The defaults for the class should work as is and shouldn't require any additional arguments but custom dataset file location can be provided with `split_file`.
@@ -104,7 +106,7 @@ The `QM9` datasets available are:
 
 `<split>` can be one of `Train`, `ID`, or `OOD`.
 ## Visualization
-The visualization module provides a simple way to visualize the data. 
+The visualization module provides a simple way to visualize the data.
 
 ```python
 from boom.viz.ParityPlot import DensityOODParityPlot, HoFOODParityPlot
@@ -131,5 +133,5 @@ fake_density_labels = {
 }
 fig = DensityOODParityPlot(true_density_labels, fake_density_labels, title="Density")
 ```
-This generates a plot like: 
+This generates a plot like:
 <img src="assets/test_parity_plot.png" width="400">

@@ -5,12 +5,16 @@ import json
 import os
 
 import matplotlib
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 RESULTS_JSON = os.path.join(SCRIPT_DIR, "results_incremental.json")
+FIGURES_DIR = os.path.join(SCRIPT_DIR, "figures")
+os.makedirs(FIGURES_DIR, exist_ok=True)
 
 with open(RESULTS_JSON) as f:
     results = json.load(f)
@@ -35,8 +39,6 @@ FULL_ENDPOINTS = [
 ENDPOINTS = [(p, lb) for p, lb in FULL_ENDPOINTS if p in available_props]
 print(f"Models: {ALL_MODEL_NAMES}")
 print(f"Endpoints ({len(ENDPOINTS)}): {[lb for _, lb in ENDPOINTS]}")
-
-matplotlib.use("Agg")
 
 plt.rcParams.update({"font.size": 12})
 
@@ -98,7 +100,7 @@ sns.heatmap(_col_normalise(id_rmse), ax=ax_id_rmse, annot=_fmt_annot(id_rmse), *
 _axis_bottom(ax_id_rmse, "Model", "ID Splits  (RMSE)")
 sns.heatmap(_col_normalise(ood_rmse), ax=ax_ood_rmse, annot=_fmt_annot(ood_rmse), **rmse_common)
 _axis_bottom(ax_ood_rmse, "Model", "OOD Splits  (RMSE)")
-rmse_path = os.path.join(SCRIPT_DIR, "heatmap_rmse.png")
+rmse_path = os.path.join(FIGURES_DIR, "heatmap_rmse.png")
 fig_rmse.savefig(rmse_path, dpi=150, bbox_inches="tight")
 plt.close(fig_rmse)
 print(f"RMSE heatmap saved to {rmse_path}")
@@ -125,7 +127,7 @@ sns.heatmap(id_r2, ax=ax_id_bin, **r2b_common)
 _axis_bottom(ax_id_bin, "Model", "ID Splits  (R²)")
 sns.heatmap(ood_r2_binned, ax=ax_ood_bin, **r2b_common)
 _axis_bottom(ax_ood_bin, "Model", "OOD Splits  (Binned R²)")
-bin_path = os.path.join(SCRIPT_DIR, "heatmap_r2.png")
+bin_path = os.path.join(FIGURES_DIR, "heatmap_r2.png")
 fig_bin.savefig(bin_path, dpi=150, bbox_inches="tight")
 plt.close(fig_bin)
 print(f"Binned-R² heatmap saved to {bin_path}")
@@ -160,11 +162,11 @@ if has_corr:
     _axis_bottom(ax_id_corr, "Model", "ID Splits  (ρ²  =  corr. coeff. squared)")
     sns.heatmap(ood_r2_corr_binned, ax=ax_ood_corr, **r2c_common)
     _axis_bottom(ax_ood_corr, "Model", "OOD Splits  (Binned ρ²)")
-    corr_path = os.path.join(SCRIPT_DIR, "heatmap_r2_corr.png")
+    corr_path = os.path.join(FIGURES_DIR, "heatmap_r2_corr.png")
     fig_corr.savefig(corr_path, dpi=150, bbox_inches="tight")
     plt.close(fig_corr)
     print(f"ρ² heatmap saved to {corr_path}")
 else:
     print(
-        "ρ² heatmap skipped — re-run reproduce_parts_of_fig_2_and_add_more_models.py to populate id_r2_corr/ood_r2_corr keys."
+        "ρ² heatmap skipped — re-run reproduce_parts_of_fig_2_and_add_elastic_net.py to populate id_r2_corr/ood_r2_corr keys."
     )
