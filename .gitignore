@@ -753,4 +753,4 @@ experiments/chemprop/plot_results.ipynb
 # Per-seed reproduction results are committable (smoke variants stay ignored).
 !**/results_incremental_seed*.json
 
-run.out
+*.out
