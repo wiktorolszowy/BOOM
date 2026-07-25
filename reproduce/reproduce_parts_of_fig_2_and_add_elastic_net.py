@@ -63,6 +63,10 @@ sys.path.insert(0, REPO_ROOT)
 os.chdir(DATA_DIR)
 
 from boom.data.prepare_splits_10k import generate_splits_10k  # noqa: E402
+from boom.data.prepare_splits_umap import (  # noqa: E402
+    generate_umap_structure_split,
+    load_umap_structure_split,
+)
 from boom.datasets.SMILESDataset import SMILESDataset  # noqa: E402
 
 
@@ -166,6 +170,20 @@ N_CPUS = _default_n_cpus()
 CHEMPROP_SMOKE_TEST = False
 SMOKE_TRAIN_MAX = 512
 SMOKE_EVAL_MAX = 256
+
+# ---- Seeds --------------------------------------------------------------
+# DEFAULT_SEED reproduces the original single-run numbers.  SEEDS is used by
+# the final multi-seed analysis (mean +/- std over these three runs).  Seeds
+# vary *model training* only; the data splits (KDE + UMAP) stay fixed.
+DEFAULT_SEED = 42
+SEEDS = [42, 43, 44]
+
+# ---- UMAP structure-based OOD (added alongside the KDE property OOD) -----
+UMAP_N_CLUSTERS = 20
+UMAP_OOD_FRAC = 0.10
+UMAP_SEED = 42  # split is frozen; independent of the model training seed
+# Cap the UMAP universe in smoke-test mode so the embedding is fast.
+UMAP_SMOKE_MAX_N = 1500
 
 
 # ===== Helpers for parallelisation and fast featurisation ===================
@@ -587,23 +605,25 @@ CHEMPROP_PARAMS = {
     "patience": 10,  # early-stopping patience
 }
 
-# Descriptor-based models
+# Descriptor-based models.
+# Factories take a *seed* so the whole pipeline can be re-run across several
+# seeds (the final multi-seed analysis) without touching call sites.
 DESCRIPTOR_MODELS = {
-    "RF": lambda: RandomForestRegressor(
+    "RF": lambda seed=DEFAULT_SEED: RandomForestRegressor(
         n_estimators=500,
         max_features="sqrt",
         n_jobs=N_CPUS,
-        random_state=42,
+        random_state=seed,
         verbose=0,
     ),
-    "ElasticNet": lambda: ElasticNetCV(
+    "ElasticNet": lambda seed=DEFAULT_SEED: ElasticNetCV(
         l1_ratio=[0.1, 0.5, 0.9, 1.0],
         alphas=30,
         cv=3,
         max_iter=10000,
         selection="random",
         n_jobs=N_CPUS,
-        random_state=42,
+        random_state=seed,
     ),
 }
 
@@ -614,11 +634,11 @@ ALL_MODEL_NAMES = ["Chemprop", *DESCRIPTOR_MODELS]
 # ===== Chemprop (MPNN) training helper =======================================
 
 
-def _train_chemprop(train_ds, id_ds, ood_ds):
+def _train_chemprop(train_ds, id_ds, ood_ds, seed=DEFAULT_SEED):
     """Train a chemprop MPNN on SMILES and return (id_pred, ood_pred) in
     original scale.  Uses PyTorch Lightning with CPU, early stopping,
     and the RegressionFFN output transform for automatic unscaling."""
-    pl.seed_everything(42, workers=True)
+    pl.seed_everything(seed, workers=True)
     torch.use_deterministic_algorithms(True, warn_only=True)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
@@ -667,7 +687,7 @@ def _train_chemprop(train_ds, id_ds, ood_ds):
         raise RuntimeError("Chemprop needs at least 2 valid training molecules.")
 
     # 90/10 train / val split for early stopping
-    rng = np.random.RandomState(42)
+    rng = np.random.RandomState(seed)
     idx = rng.permutation(len(train_dps))
     val_n = max(1, len(train_dps) // 10)
     val_dps = [train_dps[i] for i in idx[:val_n]]
@@ -784,25 +804,144 @@ def _train_chemprop(train_ds, id_ds, ood_ds):
 
 # ===== Incremental results persistence =======================================
 RESULTS_JSON = os.path.join(SCRIPT_DIR, "results_incremental.json")
+# Smoke-test runs write to a separate file so they never clobber real results.
+RESULTS_JSON_SMOKE = os.path.join(SCRIPT_DIR, "results_incremental_smoke.json")
+
+
+def _results_json_path():
+    return RESULTS_JSON_SMOKE if CHEMPROP_SMOKE_TEST else RESULTS_JSON
 
 
 def _save_results_json(results):
     """Persist current results dict to JSON (called after each endpoint)."""
-    with open(RESULTS_JSON, "w") as f:
+    path = _results_json_path()
+    with open(path, "w") as f:
         json.dump(results, f, indent=2)
-    print(f"  [saved intermediate results to {RESULTS_JSON}]")
+    print(f"  [saved intermediate results to {path}]")
 
 
 def _load_results_json():
     """Load previously saved results, if any."""
-    if os.path.exists(RESULTS_JSON):
-        with open(RESULTS_JSON) as f:
+    path = _results_json_path()
+    if os.path.exists(path):
+        with open(path) as f:
             data = json.load(f)
         # Count how many endpoints are covered
         n = sum(len(v) for v in data.values())
-        print(f"  Loaded {n} model×endpoint results from {RESULTS_JSON}")
+        print(f"  Loaded {n} model×endpoint results from {path}")
         return data
     return None
+
+
+# ===== Structure-based (UMAP) OOD =========================================
+# This is a SECOND, independent OOD analysis based on chemical structure
+# clusters.  It never touches the property-value (KDE) OOD code path above;
+# results are stored under distinct keys ("struct_ood_*") alongside them.
+
+
+def _ensure_struct_split(group_name, unique_smiles):
+    """Return {smiles: struct_ood (0/1)} for a group, generating & caching once."""
+    tag = "_smoke" if CHEMPROP_SMOKE_TEST else ""
+    csv_path = os.path.join(DATA_DIR, f"umap_splits_{group_name}{tag}.csv")
+    if not os.path.exists(csv_path):
+        figures_dir = os.path.join(SCRIPT_DIR, "figures")
+        generate_umap_structure_split(
+            unique_smiles,
+            csv_path,
+            figures_dir,
+            group_name,
+            n_clusters=UMAP_N_CLUSTERS,
+            ood_frac=UMAP_OOD_FRAC,
+            seed=UMAP_SEED,
+            max_n=UMAP_SMOKE_MAX_N if CHEMPROP_SMOKE_TEST else None,
+        )
+    else:
+        print(f"  [umap:{group_name}] using cached split {os.path.basename(csv_path)}")
+    return load_umap_structure_split(csv_path)
+
+
+def _descriptor_struct_predict(model_name, seed, tr_X, tr_y, ev_X, mean, std):
+    """Fit one descriptor model on the structure-train split and predict ev_X.
+
+    Mirrors the feature handling of the property-OOD path (RF: raw features;
+    ElasticNet: scale -> SelectKBest -> degree-2 interactions) but fits every
+    transform on the structure-train split so nothing leaks from the KDE path.
+    """
+    model = DESCRIPTOR_MODELS[model_name](seed)
+    if model_name == "ElasticNet":
+        scaler = StandardScaler().fit(tr_X)
+        tr_s = scaler.transform(tr_X)
+        ev_s = scaler.transform(ev_X)
+        k = min(20 if CHEMPROP_SMOKE_TEST else 80, tr_s.shape[1])
+        selector = SelectKBest(f_regression, k=k).fit(tr_s, tr_y)
+        tr_sel = selector.transform(tr_s)
+        ev_sel = selector.transform(ev_s)
+        if CHEMPROP_SMOKE_TEST:
+            tr_p, ev_p = tr_sel, ev_sel
+        else:
+            poly = PolynomialFeatures(degree=2, interaction_only=True, include_bias=False)
+            tr_p = poly.fit_transform(tr_sel)
+            ev_p = poly.transform(ev_sel)
+        model.fit(tr_p, tr_y)
+        return model.predict(ev_p) * std + mean
+    model.fit(tr_X, tr_y)
+    return model.predict(ev_X) * std + mean
+
+
+def _run_structure_ood(prop, label, struct_membership, value_map, clean_cache, results, seed=DEFAULT_SEED):
+    """Train each model on the structure-train split and evaluate on the
+    structure-OOD split, recording plain (unbinned) R^2 and RMSE under
+    'struct_ood_r2' / 'struct_ood_rmse' for every model."""
+    t0 = time.time()
+    print(f"  {_ts()} Structure-OOD (UMAP) pass ...")
+
+    train_ds = [(s, value_map[s]) for s, is_ood in struct_membership.items() if is_ood == 0 and s in value_map]
+    ood_ds = [(s, value_map[s]) for s, is_ood in struct_membership.items() if is_ood == 1 and s in value_map]
+
+    if CHEMPROP_SMOKE_TEST:
+        train_ds = _slice_dataset(train_ds, SMOKE_TRAIN_MAX)
+        ood_ds = _slice_dataset(ood_ds, SMOKE_EVAL_MAX)
+
+    if len(train_ds) < 2 or len(ood_ds) < 2:
+        print(f"    [!] structure split too small for {prop!r} (train={len(train_ds)}, ood={len(ood_ds)}); skipping")
+        return
+
+    tr_targets = np.array([t for _, t in train_ds], dtype=np.float64)
+    mean = float(tr_targets.mean())
+    std = float(tr_targets.std())
+    if std < 1e-10:
+        print(f"    [!] struct train_std ~ 0 for {prop!r}; skipping structure-OOD")
+        return
+
+    tr_X, tr_y = _build_split_features(train_ds, clean_cache, mean, std, "struct_train")
+    ood_X, ood_y = _build_split_features(ood_ds, clean_cache, mean, std, "struct_ood")
+    ood_true = ood_y * std + mean
+    print(f"    Sizes: struct_train={len(tr_y)}, struct_ood={len(ood_y)}")
+
+    def _store(model_name, ood_pred):
+        r2 = r2_score(ood_true, ood_pred)
+        rmse = root_mean_squared_error(ood_true, ood_pred)
+        results[model_name].setdefault(prop, {})
+        results[model_name][prop]["struct_ood_r2"] = r2
+        results[model_name][prop]["struct_ood_rmse"] = rmse
+        print(f"    {model_name:10s} struct-OOD  R²={r2:.4f}  RMSE={rmse:.4f}")
+
+    # Chemprop (SMILES). _train_chemprop returns (id, id_pred, ood, ood_pred);
+    # we pass the OOD set as the "id" argument too and use only the OOD output.
+    _, _, cp_ood_true, cp_ood_pred = _train_chemprop(train_ds, ood_ds, ood_ds, seed=seed)
+    r2 = r2_score(cp_ood_true, cp_ood_pred)
+    rmse = root_mean_squared_error(cp_ood_true, cp_ood_pred)
+    results["Chemprop"].setdefault(prop, {})
+    results["Chemprop"][prop]["struct_ood_r2"] = r2
+    results["Chemprop"][prop]["struct_ood_rmse"] = rmse
+    print(f"    {'Chemprop':10s} struct-OOD  R²={r2:.4f}  RMSE={rmse:.4f}")
+
+    # Descriptor models.
+    for model_name in DESCRIPTOR_MODELS:
+        ood_pred = _descriptor_struct_predict(model_name, seed, tr_X, tr_y, ood_X, mean, std)
+        _store(model_name, ood_pred)
+
+    print(f"    (structure-OOD pass: {_elapsed(t0)})")
 
 
 def run_all_models(start_from=None):
@@ -846,6 +985,8 @@ def run_all_models(start_from=None):
             f"n_features={len(_feat_names)}, peak mem: {_mem_mb()})\n"
         )
 
+        # ---- structure-based (UMAP) OOD split for this group (property-independent) ----
+        struct_membership = _ensure_struct_split(group_name, unique_smiles)
         # ---- train models per endpoint using cached features ----
         for prop, label in eps:
             if skip:
@@ -1036,6 +1177,15 @@ def run_all_models(start_from=None):
                 if _flag:
                     print(_flag)
                 print(f"    ({_elapsed(t0)}, peak mem: {_mem_mb()})")
+
+            # ---- Structure-based (UMAP) OOD pass (adds struct_ood_* metrics) ----
+            struct_value_map = {}
+            for _split in ("train", "id", "ood"):
+                for _s, _v in all_datasets[(prop, _split)]:
+                    struct_value_map[_s] = _v
+            _run_structure_ood(
+                prop, label, struct_membership, struct_value_map, clean_cache, results, seed=DEFAULT_SEED
+            )
 
             print(f"  Endpoint total: {_elapsed(t0_ep)}  {_ts()}\n")
             _save_results_json(results)  # persist after each endpoint

@@ -170,3 +170,58 @@ else:
     print(
         "ρ² heatmap skipped — re-run reproduce_parts_of_fig_2_and_add_elastic_net.py to populate id_r2_corr/ood_r2_corr keys."
     )
+
+# 4) Structure-based (UMAP) OOD heatmaps — plain (unbinned) R² and RMSE.
+# This is the chemical-structure OOD analysis, shown alongside (not replacing)
+# the property-value OOD above.  Only generated if struct_ood_* keys exist.
+has_struct = all(
+    "struct_ood_r2" in results[m].get(p, {}) and "struct_ood_rmse" in results[m].get(p, {})
+    for m in model_names
+    for p in prop_keys
+)
+if has_struct:
+    struct_r2 = np.array([[results[m][p]["struct_ood_r2"] for p in prop_keys] for m in model_names])
+    struct_rmse = np.array([[results[m][p]["struct_ood_rmse"] for p in prop_keys] for m in model_names])
+
+    fig_s, (ax_s_r2, ax_s_rmse) = plt.subplots(2, 1, figsize=(fig_w, fig_h), gridspec_kw={"hspace": 0.32})
+    sns.heatmap(
+        struct_r2,
+        ax=ax_s_r2,
+        annot=True,
+        fmt=".2f",
+        xticklabels=prop_labels,
+        yticklabels=model_names,
+        linewidths=0.2,
+        linecolor="white",
+        annot_kws={"fontsize": 9},
+        cmap="YlGnBu",
+        vmin=0,
+        vmax=1,
+        cbar_kws={"label": "R²", "shrink": 0.8},
+    )
+    _axis_bottom(ax_s_r2, "Model", "Structure OOD  (R²)")
+    sns.heatmap(
+        _col_normalise(struct_rmse),
+        ax=ax_s_rmse,
+        annot=_fmt_annot(struct_rmse),
+        xticklabels=prop_labels,
+        yticklabels=model_names,
+        linewidths=0.2,
+        linecolor="white",
+        annot_kws={"fontsize": 9},
+        cmap="YlGnBu_r",
+        vmin=0,
+        vmax=1,
+        fmt="",
+        cbar_kws={"label": "Relative RMSE\n(per property, 0 = best)", "shrink": 0.8},
+    )
+    _axis_bottom(ax_s_rmse, "Model", "Structure OOD  (RMSE)")
+    struct_path = os.path.join(FIGURES_DIR, "heatmap_structure_ood.png")
+    fig_s.savefig(struct_path, dpi=150, bbox_inches="tight")
+    plt.close(fig_s)
+    print(f"Structure-OOD heatmap saved to {struct_path}")
+else:
+    print(
+        "Structure-OOD heatmap skipped — re-run "
+        "reproduce_parts_of_fig_2_and_add_elastic_net.py to populate struct_ood_* keys."
+    )
