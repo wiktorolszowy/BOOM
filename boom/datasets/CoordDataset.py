@@ -35,22 +35,17 @@ class CoordDataset:
             "u298",
             "zpve",
         ]:
-            raise ValueError(
-                "Property must be one of 'density' ,'hof','alpha', 'cv','g298', or 'gap'.'"
-            )
+            raise ValueError("Property must be one of 'density' ,'hof','alpha', 'cv','g298', or 'gap'.'")
         self.split = split.lower()
         if split.lower() not in ["train", "ood", "id"]:
             raise ValueError("Split must be one of 'train', 'ood' or 'id'")
 
         if split_file is None:
-
             cur_dir = os.getcwd()
             if property.lower() in ["density", "hof"]:
                 split_file = os.path.join(cur_dir, "10k_data_with_ood_splits.csv")
             else:
-                split_file = os.path.join(
-                    cur_dir, "qm9_data_with_ood_splits_with_inchi.csv"
-                )
+                split_file = os.path.join(cur_dir, "qm9_data_with_ood_splits_with_inchi.csv")
 
         self.data = load_3D_data(self.property, cached_file, split_file)
 
@@ -58,8 +53,8 @@ class CoordDataset:
 
         data = load_processed_data(property, split_file)
 
-        assert type(data) == dict
-        assert type(self.data) == dict
+        assert isinstance(data, dict)
+        assert isinstance(self.data, dict)
 
         available_indices = []
 
@@ -75,18 +70,14 @@ class CoordDataset:
         try:
             self.smiles = [self.data[x]["smiles"] for x in self.mols]
 
-        except:
+        except Exception:
             self.smiles = [x for x in self.mols]
 
-        self.property_values = [
-            data[self.dataset_type][property.lower()][x] for x in available_indices
-        ]
+        self.property_values = [data[self.dataset_type][property.lower()][x] for x in available_indices]
         self.mol_props = {}
         for key in data[self.dataset_type].keys():
             if key != "smiles":
-                self.mol_props[key] = [
-                    data[self.dataset_type][key][x] for x in available_indices
-                ]
+                self.mol_props[key] = [data[self.dataset_type][key][x] for x in available_indices]
 
     def __len__(self):
         return len(self.smiles)
@@ -132,7 +123,6 @@ if __name__ == "__main__":
         "u298",
         "zpve",
     ]:
-
         _str = f"Property: {prop} "
         for _split in ["train", "ood", "id"]:
             dataset = CoordDataset(prop, _split, cached_file="QM9_MOL.pkl")

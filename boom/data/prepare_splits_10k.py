@@ -66,9 +66,7 @@ def prepare_splits(
     # Extract the hof values
     hof_values = np.array(hof_values).reshape(-1, 1)
 
-    density_KDE = KernelDensity(kernel="gaussian", bandwidth="scott").fit(
-        density_values
-    )
+    density_KDE = KernelDensity(kernel="gaussian", bandwidth="scott").fit(density_values)
     hof_KDE = KernelDensity(kernel="gaussian", bandwidth="scott").fit(hof_values)
 
     density_kde_scores = density_KDE.score_samples(density_values)
@@ -82,9 +80,7 @@ def prepare_splits(
     density_kde_scores = np.exp(density_kde_scores)
     hof_kde_scores = np.exp(hof_kde_scores)
 
-    for smiles, hof_score, density_score in zip(
-        smiles_strings, hof_kde_scores, density_kde_scores
-    ):
+    for smiles, hof_score, density_score in zip(smiles_strings, hof_kde_scores, density_kde_scores):
         dataframe[smiles]["density_score"] = np.exp(density_score)
         dataframe[smiles]["hof_score"] = np.exp(hof_score)
         if density_score < kth_density_score:
@@ -162,14 +158,10 @@ def prepare_splits(
     assert len(iid_hof["smiles"]) > 400
 
     assert (
-        len(train_density["smiles"])
-        + len(iid_density["smiles"])
-        + len(ood_density["smiles"])
-        == num_molecules
+        len(train_density["smiles"]) + len(iid_density["smiles"]) + len(ood_density["smiles"]) == num_molecules
     ), f"Total number of molecules is {num_molecules} but the sum of splits isn't equal to it."
     assert (
-        len(train_hof["smiles"]) + len(iid_hof["smiles"]) + len(ood_hof["smiles"])
-        == num_molecules
+        len(train_hof["smiles"]) + len(iid_hof["smiles"]) + len(ood_hof["smiles"]) == num_molecules
     ), f"Total number of molecules is {num_molecules} but the sum of splits isn't equal to it."
 
     print(
@@ -229,9 +221,10 @@ def download_text_file(url, filename):
 
 
 def download_10k_dft_data(data_dir):
-
     hof_url = "https://raw.githubusercontent.com/FLASK-LLNL/LLNL-10k-Dataset/refs/heads/main/10k_dft_hof_data.csv"
-    density_url = "https://raw.githubusercontent.com/FLASK-LLNL/LLNL-10k-Dataset/refs/heads/main/10k_dft_density_data.csv"
+    density_url = (
+        "https://raw.githubusercontent.com/FLASK-LLNL/LLNL-10k-Dataset/refs/heads/main/10k_dft_density_data.csv"
+    )
 
     density_fname = osp.join(data_dir, "10k_dft_density_data.csv")
     hof_fname = osp.join(data_dir, "10k_dft_hof_data.csv")

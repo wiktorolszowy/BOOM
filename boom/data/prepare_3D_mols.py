@@ -5,15 +5,13 @@
 ## SPDX-License-Identifier: Apache-2.0
 ################################################################################
 try:
-    import rdkit
     from rdkit import Chem
-    from rdkit.Chem import AllChem
+    from rdkit.Chem import AllChem, rdDistGeom
 except ImportError:
     raise ImportError("rdkit is not installed. Please install it to generate 3D mols.")
 
 import numpy as np
 from tqdm import tqdm
-from boom.data.load_processed_data import package_data_loader
 from boom.data.qm9_3d_utils import download_dataset_qm9, extract_tarfile
 import pickle
 from os.path import join as join
@@ -78,7 +76,7 @@ def retrieve_qm9_dataset(cache_file_name, split_file):
 
     with open(split_file, "r") as f:
         data = f.read().splitlines()
-    smiles_list = [x.strip().split(",")[0] for x in smiles_data[1:]]
+    smiles_list = [x.strip().split(",")[0] for x in data[1:]]
     smiles_list = [Chem.MolToSmiles(Chem.MolFromSmiles(x)) for x in smiles_list]
     # inchi_list = [Chem.MolToInchi(Chem.MolFromSmiles(x)) for x in smiles_list]
 

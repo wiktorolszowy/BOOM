@@ -10,9 +10,7 @@ import matplotlib.pyplot as plt
 
 def plot_dataset(dataset_name="qm9"):
     available_datasets = ["qm9", "10k_dft", "all"]
-    assert (
-        dataset_name in available_datasets
-    ), 'Dataset name must be "qm9","10k_dft" or "all".'
+    assert dataset_name in available_datasets, 'Dataset name must be "qm9","10k_dft" or "all".'
     num_bins = 30
     if dataset_name != "all":
         dataset_name_array = [dataset_name]
@@ -39,9 +37,10 @@ def plot_dataset(dataset_name="qm9"):
                 iid_indices = np.where(data[:, iid_column] == "1")[0]
                 train_indices = np.where(data[:, train_column] == "1")[0]
                 prop_index = (prop * 5) + 1
-                data_min, data_max = min(
-                    np.array(data[:, prop_index][1:], dtype=float)
-                ), max(np.array(data[:, prop_index][1:], dtype=float))
+                data_min, data_max = (
+                    min(np.array(data[:, prop_index][1:], dtype=float)),
+                    max(np.array(data[:, prop_index][1:], dtype=float)),
+                )
                 bins = np.linspace(data_min, data_max, num_bins)
 
                 plt.hist(
@@ -93,9 +92,10 @@ def plot_dataset(dataset_name="qm9"):
                 iid_indices = np.where(data[:, iid_column] == "1")[0]
                 train_indices = np.where(data[:, train_column] == "1")[0]
                 prop_index = prop + 1
-                data_min, data_max = min(
-                    np.array(data[:, prop_index][1:], dtype=float)
-                ), max(np.array(data[:, prop_index][1:], dtype=float))
+                data_min, data_max = (
+                    min(np.array(data[:, prop_index][1:], dtype=float)),
+                    max(np.array(data[:, prop_index][1:], dtype=float)),
+                )
                 bins = np.linspace(data_min, data_max, num_bins)
 
                 plt.hist(

@@ -35,9 +35,7 @@ def ParityPlot(
     Plots a parity plot of y_true vs y_pred.
     Use this to standardize the parity plot across the experiments.
     """
-    assert (
-        y_true is not None and y_pred is not None
-    ), "Both y_true and y_pred must be provided"
+    assert y_true is not None and y_pred is not None, "Both y_true and y_pred must be provided"
     assert y_true.ndim == 1 and y_pred.ndim == 1, "y_true and y_pred must be 1D arrays"
     assert y_true.shape == y_pred.shape, "y_true and y_pred must have the same shape"
     assert label in ["ID", "OOD"], "label must be either 'ID' or 'OOD'"
@@ -58,9 +56,7 @@ def ParityPlot(
             color=color,
         )
     else:
-        sns.scatterplot(
-            x=y_true, y=y_pred, ax=ax, alpha=1, size=5, legend=False, label=label
-        )
+        sns.scatterplot(x=y_true, y=y_pred, ax=ax, alpha=1, size=5, legend=False, label=label)
 
 
 def OODParityPlot(
@@ -76,12 +72,8 @@ def OODParityPlot(
     """
     Plots party plots for IID and OOD test samples
     """
-    assert (
-        "id" in true_labels and "ood" in true_labels
-    ), "true_labels must contain 'id' and 'ood' keys"
-    assert (
-        "id" in pred_labels and "ood" in pred_labels
-    ), "pred_labels must contain 'id' and 'ood' keys"
+    assert "id" in true_labels and "ood" in true_labels, "true_labels must contain 'id' and 'ood' keys"
+    assert "id" in pred_labels and "ood" in pred_labels, "pred_labels must contain 'id' and 'ood' keys"
     assert len(true_labels["id"]) == len(
         pred_labels["id"]
     ), "Number of ID samples in true_labels and pred_labels must be the same"

@@ -1,3 +1,9 @@
+# The experiments/ tree is a model zoo containing vendored third-party code
+# (e.g. molformer, regression_transformer) that is not style-managed here and
+# includes files that ruff cannot even parse. Hooks are enforced on the
+# maintained code only: the boom/ package, the reproduce/ pipeline and tests/.
+exclude: '^experiments/'
+
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0

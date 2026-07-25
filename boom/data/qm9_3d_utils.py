@@ -35,11 +35,7 @@ def download_dataset_qm9(
         return
     # Important to avoid a race condition
     os.makedirs(gdb9dir, exist_ok=True)
-    logging.info(
-        "Downloading and processing GDB9 dataset. Output will be in directory: {}.".format(
-            gdb9dir
-        )
-    )
+    logging.info("Downloading and processing GDB9 dataset. Output will be in directory: {}.".format(gdb9dir))
 
     logging.info("Beginning download of GDB9 dataset!")
 
@@ -125,9 +121,7 @@ def extract_tarfile(fname, outputdir, smiles_list):
     """
     import tarfile
 
-    logging.info(
-        "Extracting tarfile: {} to output directory: {}".format(tarfile, outputdir)
-    )
+    logging.info("Extracting tarfile: {} to output directory: {}".format(tarfile, outputdir))
 
     mols = {}
     if tarfile.is_tarfile(fname):
@@ -169,7 +163,6 @@ def main():
     smiles_list = [Chem.MolToSmiles(Chem.MolFromSmiles(x)) for x in smiles_list]
     mols = extract_tarfile(tar_file, join(datadir, dataname), smiles_list)
 
-    breakpoint()
     import pickle
 
     pickle_file = join(datadir, "qm9_3d.pkl")

@@ -27,22 +27,17 @@ class SMILESDataset:
             "u298",
             "zpve",
         ]:
-            raise ValueError(
-                "Property must be either 'density' ,'hof','alpha', 'cv','g298', or 'gap'."
-            )
+            raise ValueError("Property must be either 'density' ,'hof','alpha', 'cv','g298', or 'gap'.")
         self.split = split.lower()
         if split.lower() not in ["train", "ood", "id"]:
             raise ValueError("Split must be either 'train', 'ood' or 'id'")
 
         if split_file is None:
-
             cur_dir = os.getcwd()
             if property.lower() in ["density", "hof"]:
                 split_file = os.path.join(cur_dir, "10k_data_with_ood_splits.csv")
             else:
-                split_file = os.path.join(
-                    cur_dir, "qm9_data_with_ood_splits_with_inchi.csv"
-                )
+                split_file = os.path.join(cur_dir, "qm9_data_with_ood_splits_with_inchi.csv")
         self.data = load_processed_data(self.property, split_file)
 
         self.dataset_type = f"{split.lower()}_{property.lower()}"

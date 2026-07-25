@@ -24,7 +24,6 @@ def package_data_loader(default_file, split_file=None):
 
 
 def _load_10k_data(split_file):
-
     # data = package_data_loader("10k_dft_data_with_ood_splits.csv", split_file)
     with open(split_file, "r") as f:
         data = f.read().splitlines()
@@ -47,15 +46,9 @@ def _load_10k_data(split_file):
         hof_ood = int(values[8])
         hof_train = int(values[9])
 
-        density_subset = (
-            "train_density"
-            if density_train == 1
-            else "ood_density" if density_ood == 1 else "id_density"
-        )
+        density_subset = "train_density" if density_train == 1 else "ood_density" if density_ood == 1 else "id_density"
 
-        hof_subset = (
-            "train_hof" if hof_train == 1 else "ood_hof" if hof_ood == 1 else "id_hof"
-        )
+        hof_subset = "train_hof" if hof_train == 1 else "ood_hof" if hof_ood == 1 else "id_hof"
 
         data_dict[density_subset]["smiles"].append(smiles)
         data_dict[density_subset]["density"].append(float(density))
@@ -91,9 +84,7 @@ def _load_qm9_data(target, split_file):
         target_train = int(values[train_column])
 
         target_subset = (
-            f"train_{target}"
-            if target_train == 1
-            else f"ood_{target}" if target_ood == 1 else f"id_{target}"
+            f"train_{target}" if target_train == 1 else f"ood_{target}" if target_ood == 1 else f"id_{target}"
         )
         # inchi = MolToInchi(MolFromSmiles(smiles))
 
@@ -121,9 +112,7 @@ def _load_molnet_data(target, split_file=None):
         target_train = int(values[4])
 
         target_subset = (
-            f"train_{target}"
-            if target_train == 1
-            else f"ood_{target}" if target_ood == 1 else f"iid_{target}"
+            f"train_{target}" if target_train == 1 else f"ood_{target}" if target_ood == 1 else f"iid_{target}"
         )
 
         data_dict[target_subset]["smiles"].append(smiles)
@@ -132,7 +121,6 @@ def _load_molnet_data(target, split_file=None):
 
 
 def load_processed_data(target_name, split_file):
-
     if target_name in ["density", "hof"]:
         if not osp.exists(split_file):
             data_dir = osp.dirname(split_file)
@@ -164,7 +152,5 @@ def load_processed_data(target_name, split_file):
 
 if __name__ == "__main__":
     data_dir = osp.dirname(__file__)
-    data = load_processed_data(
-        "density", f"{data_dir}/10k_dft_data_with_ood_splits.csv"
-    )
+    data = load_processed_data("density", f"{data_dir}/10k_dft_data_with_ood_splits.csv")
     print(data.keys())

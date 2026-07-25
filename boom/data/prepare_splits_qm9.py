@@ -168,22 +168,14 @@ def prepare_splits_qm9(
         property_values = np.array(property_values).reshape(-1, 1).astype(np.float64)
 
         print("Starting Kernel Density Estimation for " + property_name)
-        property_KDE = KernelDensity(kernel="gaussian", bandwidth="scott").fit(
-            property_values
-        )
+        property_KDE = KernelDensity(kernel="gaussian", bandwidth="scott").fit(property_values)
         print("Kernel Density Estimation Done!")
 
         print("Calculating scores for " + property_name)
 
         property_kde_scores = property_KDE.score_samples(property_values)
 
-        kth_property_score_index = np.argpartition(
-            np.exp(property_kde_scores), num_ood_samples
-        )[num_ood_samples]
-        kth_property_score = np.exp(property_kde_scores[kth_property_score_index])
-        ood_indices = np.argpartition(np.exp(property_kde_scores), num_ood_samples)[
-            0:num_ood_samples
-        ]
+        ood_indices = np.argpartition(np.exp(property_kde_scores), num_ood_samples)[0:num_ood_samples]
         property_kde_scores = np.exp(property_kde_scores)
 
         counter = 0
@@ -248,7 +240,6 @@ def prepare_splits_qm9(
 
 
 def generate_splits_qm9(data_dir):
-
     props = [
         "mu",
         "alpha",
