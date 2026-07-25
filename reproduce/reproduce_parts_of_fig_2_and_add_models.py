@@ -184,7 +184,10 @@ SEEDS = [42, 43, 44]
 RUN_SEED = DEFAULT_SEED
 
 # ---- UMAP structure-based OOD (added alongside the KDE property OOD) -----
-UMAP_N_CLUSTERS = 20
+# Clusters are found with HDBSCAN on the 2-D UMAP embedding, and the most
+# *detached* clusters (largest empty gap to the rest of the map) are held out
+# as OOD until ~UMAP_OOD_FRAC of the molecules are covered.
+UMAP_MIN_CLUSTER_SIZE = 20
 UMAP_OOD_FRAC = 0.10
 UMAP_SEED = 42  # split is frozen; independent of the model training seed
 # Cap the UMAP universe in smoke-test mode so the embedding is fast.
@@ -861,7 +864,7 @@ def _ensure_struct_split(group_name, unique_smiles):
             csv_path,
             figures_dir,
             group_name,
-            n_clusters=UMAP_N_CLUSTERS,
+            min_cluster_size=UMAP_MIN_CLUSTER_SIZE,
             ood_frac=UMAP_OOD_FRAC,
             seed=UMAP_SEED,
             max_n=UMAP_SMOKE_MAX_N if CHEMPROP_SMOKE_TEST else None,
@@ -1214,6 +1217,28 @@ def run_all_models(start_from=None):
     print("Run reproduce/make_heatmaps.py to generate heatmaps.")
 
 
+def generate_umap_splits_only():
+    """Generate ONLY the structure-based (UMAP/HDBSCAN) OOD splits, then stop.
+
+    Assumes the per-property/split CSVs already exist (produced by Steps 1-3).
+    Model featurisation is skipped entirely — only SMILES are needed to build
+    the structure splits and their plots.  Honours --smoke-test (writes the
+    ``*_smoke`` split variant on a capped molecule universe).
+    """
+    print(f"\n[UMAP-only] {_ts()} Generating structure-based OOD splits ...")
+    tenk_eps = [(p, lb) for p, lb in ENDPOINTS if p in ("density", "hof")]
+    qm9_eps = [(p, lb) for p, lb in ENDPOINTS if p not in ("density", "hof")]
+    for group_name, eps in [("10k", tenk_eps), ("QM9", qm9_eps)]:
+        unique_smiles_set = set()
+        for prop, _label in eps:
+            for split in ("train", "id", "ood"):
+                unique_smiles_set.update(s for s, _ in SMILESDataset(prop, split))
+        unique_smiles = sorted(unique_smiles_set)
+        print(f"[{group_name}] {_ts()} {len(unique_smiles)} unique molecules -> structure split ...")
+        _ensure_struct_split(group_name, unique_smiles)
+    print(f"[UMAP-only] {_ts()} Done. Splits + plots are in experiments/data/ and figures/.")
+
+
 # ===== Main =================================================================
 def _parse_args():
     valid_endpoints = [p for p, _ in ENDPOINTS]
@@ -1249,6 +1274,16 @@ def _parse_args():
             "Run a very fast sanity-check mode for all models "
             "(small subsets; Chemprop uses a smaller network; "
             "ElasticNet skips interaction expansion)."
+        ),
+    )
+    parser.add_argument(
+        "--umap-splits-only",
+        dest="umap_splits_only",
+        action="store_true",
+        help=(
+            "Only generate the structure-based (UMAP/HDBSCAN) OOD splits and "
+            "their plots, then exit before any model training. Runs the data-"
+            "prep steps (1-3) first if needed."
         ),
     )
     return parser.parse_args()
@@ -1302,7 +1337,10 @@ if __name__ == "__main__":
         ensure_qm9_property_csvs()  # Step 1
         ensure_10k_splits()  # Step 2
         generate_qm9_splits()  # Step 3
-        run_all_models(start_from=args.start_from)  # Step 4
+        if args.umap_splits_only:
+            generate_umap_splits_only()  # Structure splits only, then stop
+        else:
+            run_all_models(start_from=args.start_from)  # Step 4
     finally:
         total_time = _elapsed(t_script_start)
         log_file.close()

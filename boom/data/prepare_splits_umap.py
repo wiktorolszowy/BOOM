@@ -6,18 +6,24 @@ modify them.  The procedure is:
 
 1. Compute Morgan fingerprints (2048-bit, radius 2) with RDKit.
 2. Embed them into 2-D with UMAP (default hyper-parameters).
-3. Cluster the 2-D embedding with K-means (>= 20 clusters).
-4. Select whole clusters totalling ~10% of the molecules as the OOD test set;
-   the remaining clusters form the training set.  A cluster is never split, so
-   every molecule of a cluster is entirely in train OR entirely in test.
+3. Cluster the 2-D embedding with HDBSCAN, which finds groups separated by
+   low-density *gaps* (dense points bridged by empty space stay together, and
+   sparse bridge points are labelled as noise rather than forced into a cluster).
+4. Rank clusters by how *detached* they are from the rest of the map -- measured
+   as the width of the empty gap separating a cluster from all other molecules
+   (the shortest distance bridging the cluster to any non-cluster point).  Hold
+   out the most detached whole clusters until ~10% of the molecules are OOD; the
+   remaining clusters plus all noise points form the training set.  A cluster is
+   never split, so every molecule of a cluster is entirely in train OR entirely
+   in test.
 
 The split is *property-independent*: one clustering per dataset group, reused
 for every endpoint in that group.
 
-Determinism: fingerprints are deterministic; UMAP and K-means are given a fixed
-``seed`` (UMAP runs single-threaded when seeded, which is slower but
-reproducible).  The result is written to a CSV so every downstream run reads the
-same frozen split.
+Determinism: fingerprints are deterministic; UMAP is given a fixed ``seed``
+(UMAP runs single-threaded when seeded, which is slower but reproducible);
+HDBSCAN and the gap ranking are deterministic given the embedding.  The result
+is written to a CSV so every downstream run reads the same frozen split.
 """
 
 import json
@@ -30,7 +36,8 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from rdkit import Chem  # noqa: E402
 from rdkit.Chem import rdFingerprintGenerator  # noqa: E402
-from sklearn.cluster import KMeans  # noqa: E402
+from scipy.spatial import cKDTree  # noqa: E402
+from sklearn.cluster import HDBSCAN  # noqa: E402
 
 # CSV columns written by :func:`generate_umap_structure_split`.
 CSV_COLUMNS = ["smiles", "umap_x", "umap_y", "cluster", "struct_ood", "struct_train"]
@@ -56,39 +63,66 @@ def morgan_fingerprints(smiles_list, radius=2, n_bits=2048):
     return np.vstack(feats).astype(np.uint8), valid
 
 
-def _select_ood_clusters(cluster_sizes, n_total, ood_frac):
-    """Pick whole clusters whose combined size is closest to ``ood_frac``.
+def _cluster_separations(embedding, labels):
+    """Return {cluster_id: gap} measuring how detached each cluster is.
 
-    Deterministic: clusters are considered smallest-first (tie-broken by id).
-    Returns a sorted list of chosen cluster ids.
+    ``gap`` is the width of the empty space separating a cluster from the rest
+    of the map: the shortest distance from any point of the cluster to any
+    point *not* in that cluster (other clusters and noise both count as "the
+    rest").  A larger gap => a more detached, well-separated island.  Noise
+    points (label -1) are never scored as clusters.
+
+    Computed exactly: for each cluster a KD-tree is built over all *other*
+    points, and the minimum nearest-neighbour distance from the cluster's own
+    points is the bridging gap.  (The complement is always non-empty because a
+    split is only produced when at least two clusters exist.)
     """
+    seps = {}
+    for c in (int(x) for x in np.unique(labels) if x != -1):
+        in_mask = labels == c
+        ctree = cKDTree(embedding[~in_mask])
+        d, _ = ctree.query(embedding[in_mask], k=1)
+        seps[c] = float(d.min())
+    return seps
+
+
+def _select_detached_clusters(embedding, labels, ood_frac):
+    """Pick the most *detached* whole clusters totalling ~``ood_frac``.
+
+    Clusters are ranked by their bridging gap (largest first); whole clusters
+    are added most-detached-first while staying within the target size, then
+    one more is added if it lands closer to the target.  Noise points are never
+    selected.  Deterministic (gap desc, ties broken by cluster id).
+
+    Returns ``(chosen_ids, separations, sizes)``.
+    """
+    n_total = len(labels)
     target = ood_frac * n_total
-    order = sorted(cluster_sizes, key=lambda c: (cluster_sizes[c], c))
+    seps = _cluster_separations(embedding, labels)
+    sizes = {int(c): int((labels == c).sum()) for c in seps}
+    order = sorted(seps, key=lambda c: (-seps[c], c))  # most detached first
 
-    chosen = []
-    cur = 0
+    chosen, cur = [], 0
     for c in order:
-        if cur + cluster_sizes[c] <= target:
+        if cur + sizes[c] <= target:
             chosen.append(c)
-            cur += cluster_sizes[c]
+            cur += sizes[c]
 
-    # Optionally add one more cluster if it gets us closer to the target.
-    best_c, best_improve = None, 0.0
+    # Add one more detached cluster if it gets the total closer to the target.
     for c in order:
         if c in chosen:
             continue
-        improvement = abs(cur - target) - abs(cur + cluster_sizes[c] - target)
-        if improvement > best_improve:
-            best_improve, best_c = improvement, c
-    if best_c is not None:
-        chosen.append(best_c)
+        if abs(cur + sizes[c] - target) < abs(cur - target):
+            chosen.append(c)
+            cur += sizes[c]
+            break
 
     # Guarantee a non-empty, non-total OOD set.
     if not chosen:
         chosen = [order[0]]
-    if len(chosen) >= len(cluster_sizes):
+    if len(chosen) >= len(seps):
         chosen = [order[0]]
-    return sorted(chosen)
+    return sorted(chosen), seps, sizes
 
 
 def _save_plots(embedding, labels, ood_mask, figures_dir, group_name):
@@ -125,7 +159,7 @@ def generate_umap_structure_split(
     out_csv,
     figures_dir,
     group_name,
-    n_clusters=20,
+    min_cluster_size=50,
     ood_frac=0.10,
     seed=42,
     max_n=None,
@@ -141,13 +175,14 @@ def generate_umap_structure_split(
         Where to write the split CSV (and the summary JSON alongside it).
     figures_dir : str
         Directory for the UMAP summary plots.
-    n_clusters : int
-        Number of K-means clusters (>= 20 per the study design).
+    min_cluster_size : int
+        Minimum cluster size for HDBSCAN.  Smaller values detect smaller
+        detached islands; larger values keep only bigger coherent groups.
     ood_frac : float
         Target fraction of molecules assigned to the OOD test set.
     seed : int
-        Random seed for UMAP + K-means (kept fixed across model seeds so the
-        split itself is constant).
+        Random seed for UMAP (kept fixed across model seeds so the split
+        itself is constant).  HDBSCAN and the gap ranking are deterministic.
     max_n : int | None
         If set and the universe is larger, deterministically subsample to this
         many molecules (used for fast smoke tests).
@@ -172,19 +207,27 @@ def generate_umap_structure_split(
 
     _log(f"  [umap:{group_name}] computing Morgan fingerprints for {len(smiles_list)} molecules ...")
     feats, valid = morgan_fingerprints(smiles_list)
-    if len(valid) < n_clusters:
-        raise RuntimeError(f"Too few valid molecules ({len(valid)}) for {n_clusters} clusters.")
+    if len(valid) < 2 * min_cluster_size:
+        raise RuntimeError(
+            f"Too few valid molecules ({len(valid)}) for HDBSCAN " f"with min_cluster_size={min_cluster_size}."
+        )
 
     _log(f"  [umap:{group_name}] running UMAP (seed={seed}, single-threaded) ...")
     reducer = umap.UMAP(n_components=2, random_state=seed)
     embedding = reducer.fit_transform(feats)
 
-    _log(f"  [umap:{group_name}] K-means into {n_clusters} clusters ...")
-    km = KMeans(n_clusters=n_clusters, random_state=seed, n_init=10)
-    labels = km.fit_predict(embedding)
+    _log(f"  [umap:{group_name}] HDBSCAN (min_cluster_size={min_cluster_size}) ...")
+    clusterer = HDBSCAN(min_cluster_size=min_cluster_size)
+    labels = clusterer.fit_predict(embedding)
 
-    cluster_sizes = {int(c): int((labels == c).sum()) for c in range(n_clusters)}
-    ood_clusters = _select_ood_clusters(cluster_sizes, len(valid), ood_frac)
+    n_clusters_found = int(len({int(c) for c in labels if c != -1}))
+    n_noise = int((labels == -1).sum())
+    if n_clusters_found < 2:
+        raise RuntimeError(
+            f"HDBSCAN found {n_clusters_found} cluster(s) for {group_name}; " "try lowering min_cluster_size."
+        )
+
+    ood_clusters, separations, cluster_sizes = _select_detached_clusters(embedding, labels, ood_frac)
     ood_mask = np.isin(labels, ood_clusters)
 
     # ---- write split CSV ----
@@ -198,14 +241,20 @@ def generate_umap_structure_split(
     summary = {
         "group": group_name,
         "seed": seed,
+        "method": "hdbscan_gap",
+        "min_cluster_size": min_cluster_size,
         "n_total": len(valid),
-        "n_clusters": n_clusters,
+        "n_clusters_found": n_clusters_found,
+        "n_noise": n_noise,
         "ood_frac_target": ood_frac,
         "ood_frac_actual": n_ood / len(valid),
         "n_ood": n_ood,
         "n_train": len(valid) - n_ood,
         "ood_clusters": ood_clusters,
         "cluster_sizes": cluster_sizes,
+        "cluster_separations": {
+            int(c): (round(separations[c], 6) if np.isfinite(separations[c]) else None) for c in separations
+        },
     }
     with open(os.path.splitext(out_csv)[0] + "_summary.json", "w") as f:
         json.dump(summary, f, indent=2)
