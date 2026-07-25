@@ -44,6 +44,7 @@ from sklearn.metrics import r2_score, root_mean_squared_error
 from sklearn.preprocessing import PolynomialFeatures, StandardScaler
 from scipy.stats import gaussian_kde
 from tqdm import tqdm
+from xgboost import XGBRegressor
 
 RDLogger.logger().setLevel(RDLogger.ERROR)  # suppress InChI warnings
 
@@ -622,6 +623,12 @@ DESCRIPTOR_MODELS = {
         cv=3,
         max_iter=10000,
         selection="random",
+        n_jobs=N_CPUS,
+        random_state=seed,
+    ),
+    # XGBoost with library defaults (no hyper-parameter tuning); like RF it
+    # uses the raw descriptor features (tree models are scale-invariant).
+    "XGBoost": lambda seed=DEFAULT_SEED: XGBRegressor(
         n_jobs=N_CPUS,
         random_state=seed,
     ),
