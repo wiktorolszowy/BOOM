@@ -34,7 +34,7 @@ os.makedirs(FIGURES_DIR, exist_ok=True)
 if not os.path.exists(RESULTS_JSON):
     raise SystemExit(
         f"Results file not found: {RESULTS_JSON}\n"
-        "Run reproduce_parts_of_fig_2_and_add_elastic_net.py with the matching --seed first."
+        "Run reproduce_parts_of_fig_2_and_add_models.py with the matching --seed first."
     )
 
 with open(RESULTS_JSON) as f:
@@ -189,7 +189,7 @@ if has_corr:
     print(f"ρ² heatmap saved to {corr_path}")
 else:
     print(
-        "ρ² heatmap skipped — re-run reproduce_parts_of_fig_2_and_add_elastic_net.py to populate id_r2_corr/ood_r2_corr keys."
+        "ρ² heatmap skipped — re-run reproduce_parts_of_fig_2_and_add_models.py to populate id_r2_corr/ood_r2_corr keys."
     )
 
 # 4) Structure-based (UMAP) OOD heatmaps — plain (unbinned) R² and RMSE.
@@ -244,5 +244,5 @@ if has_struct:
 else:
     print(
         "Structure-OOD heatmap skipped — re-run "
-        "reproduce_parts_of_fig_2_and_add_elastic_net.py to populate struct_ood_* keys."
+        "reproduce_parts_of_fig_2_and_add_models.py to populate struct_ood_* keys."
     )

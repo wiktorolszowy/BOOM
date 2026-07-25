@@ -28,20 +28,20 @@ Runs are **seeded**. The seed is chosen with `--seed` (default `42`) and is enco
 For a quick sanity check (reduced data and fewer estimators; writes to `results_incremental_smoke_seed<seed>.json`):
 
 ```bash
-uv run python reproduce/reproduce_parts_of_fig_2_and_add_elastic_net.py --smoke-test
+uv run python reproduce/reproduce_parts_of_fig_2_and_add_models.py --smoke-test
 ```
 
 For the full run with the default seed 42 (this will take a while):
 
 ```bash
-uv run python reproduce/reproduce_parts_of_fig_2_and_add_elastic_net.py --seed 42
+uv run python reproduce/reproduce_parts_of_fig_2_and_add_models.py --seed 42
 ```
 
 For the multi-seed analysis, run the other two seeds as well:
 
 ```bash
-uv run python reproduce/reproduce_parts_of_fig_2_and_add_elastic_net.py --seed 43
-uv run python reproduce/reproduce_parts_of_fig_2_and_add_elastic_net.py --seed 44
+uv run python reproduce/reproduce_parts_of_fig_2_and_add_models.py --seed 43
+uv run python reproduce/reproduce_parts_of_fig_2_and_add_models.py --seed 44
 ```
 
 Each produces its own `reproduce/results_incremental_seed<seed>.json`.

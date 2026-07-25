@@ -10,7 +10,7 @@ generation (with progress output), feature caching, and model
 training/evaluation.
 
 Run from:  repo root
-Usage:     uv run python reproduce_parts_of_fig_2_and_add_elastic_net.py
+Usage:     uv run python reproduce_parts_of_fig_2_and_add_models.py
 """
 
 import argparse
