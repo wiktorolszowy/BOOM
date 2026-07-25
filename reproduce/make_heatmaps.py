@@ -1,6 +1,11 @@
 #!/usr/bin/env python
-"""Generate heatmaps from results_incremental.json (partial or full)."""
+"""Generate heatmaps from a per-seed results file (partial or full).
 
+The seed is encoded in the results filename only, e.g.
+``results_incremental_seed42.json``.  Choose it with ``--seed`` (default 42).
+"""
+
+import argparse
 import json
 import os
 
@@ -12,9 +17,25 @@ import numpy as np
 import seaborn as sns
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-RESULTS_JSON = os.path.join(SCRIPT_DIR, "results_incremental.json")
+
+_parser = argparse.ArgumentParser(description="Generate BOOM result heatmaps for one seed.")
+_parser.add_argument("--seed", type=int, default=42, help="Seed whose results file to plot (default: 42).")
+_parser.add_argument(
+    "--results",
+    default=None,
+    help="Explicit results JSON path (overrides --seed).",
+)
+_args = _parser.parse_args()
+
+RESULTS_JSON = _args.results or os.path.join(SCRIPT_DIR, f"results_incremental_seed{_args.seed}.json")
 FIGURES_DIR = os.path.join(SCRIPT_DIR, "figures")
 os.makedirs(FIGURES_DIR, exist_ok=True)
+
+if not os.path.exists(RESULTS_JSON):
+    raise SystemExit(
+        f"Results file not found: {RESULTS_JSON}\n"
+        "Run reproduce_parts_of_fig_2_and_add_elastic_net.py with the matching --seed first."
+    )
 
 with open(RESULTS_JSON) as f:
     results = json.load(f)

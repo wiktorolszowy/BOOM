@@ -178,6 +178,10 @@ SMOKE_EVAL_MAX = 256
 # vary *model training* only; the data splits (KDE + UMAP) stay fixed.
 DEFAULT_SEED = 42
 SEEDS = [42, 43, 44]
+# Active model-training seed for this run (overridden by --seed in __main__).
+# It is written into the results *filename* (results_incremental_seed<seed>.json),
+# never into the file contents.
+RUN_SEED = DEFAULT_SEED
 
 # ---- UMAP structure-based OOD (added alongside the KDE property OOD) -----
 UMAP_N_CLUSTERS = 20
@@ -626,9 +630,9 @@ DESCRIPTOR_MODELS = {
         n_jobs=N_CPUS,
         random_state=seed,
     ),
-    # XGBoost with library defaults (no hyper-parameter tuning); like RF it
-    # uses the raw descriptor features (tree models are scale-invariant).
     "XGBoost": lambda seed=DEFAULT_SEED: XGBRegressor(
+        subsample=0.8,
+        colsample_bytree=0.8,
         n_jobs=N_CPUS,
         random_state=seed,
     ),
@@ -810,13 +814,13 @@ def _train_chemprop(train_ds, id_ds, ood_ds, seed=DEFAULT_SEED):
 
 
 # ===== Incremental results persistence =======================================
-RESULTS_JSON = os.path.join(SCRIPT_DIR, "results_incremental.json")
-# Smoke-test runs write to a separate file so they never clobber real results.
-RESULTS_JSON_SMOKE = os.path.join(SCRIPT_DIR, "results_incremental_smoke.json")
+# The active seed is encoded in the FILENAME only (not inside the JSON), e.g.
+# results_incremental_seed42.json / results_incremental_smoke_seed42.json.
 
 
 def _results_json_path():
-    return RESULTS_JSON_SMOKE if CHEMPROP_SMOKE_TEST else RESULTS_JSON
+    tag = "_smoke" if CHEMPROP_SMOKE_TEST else ""
+    return os.path.join(SCRIPT_DIR, f"results_incremental{tag}_seed{RUN_SEED}.json")
 
 
 def _save_results_json(results):
@@ -1090,6 +1094,7 @@ def run_all_models(start_from=None):
                 train_ds,
                 id_ds,
                 ood_ds,
+                seed=RUN_SEED,
             )
             cp_id_r2 = r2_score(cp_id_true, cp_id_pred)
             cp_ood_r2_binned = binned_r2(cp_ood_true, cp_ood_pred, train_med)
@@ -1123,7 +1128,7 @@ def run_all_models(start_from=None):
             for model_name, model_factory in DESCRIPTOR_MODELS.items():
                 t0 = time.time()
                 print(f"  {_ts()} Training {model_name} ...")
-                model = model_factory()
+                model = model_factory(RUN_SEED)
 
                 if model_name == "ElasticNet":
                     # Scaled + degree-2 interaction features.
@@ -1190,9 +1195,7 @@ def run_all_models(start_from=None):
             for _split in ("train", "id", "ood"):
                 for _s, _v in all_datasets[(prop, _split)]:
                     struct_value_map[_s] = _v
-            _run_structure_ood(
-                prop, label, struct_membership, struct_value_map, clean_cache, results, seed=DEFAULT_SEED
-            )
+            _run_structure_ood(prop, label, struct_membership, struct_value_map, clean_cache, results, seed=RUN_SEED)
 
             print(f"  Endpoint total: {_elapsed(t0_ep)}  {_ts()}\n")
             _save_results_json(results)  # persist after each endpoint
@@ -1228,6 +1231,16 @@ def _parse_args():
         ),
     )
     parser.add_argument(
+        "--seed",
+        type=int,
+        default=DEFAULT_SEED,
+        help=(
+            "Model-training seed. Written into the results FILENAME only "
+            f"(results_incremental_seed<seed>.json). Default: {DEFAULT_SEED}. "
+            "The UMAP + KDE splits are held fixed across seeds."
+        ),
+    )
+    parser.add_argument(
         "--smoke-test",
         "--chemprop-smoke-test",
         dest="smoke_test",
@@ -1244,6 +1257,7 @@ def _parse_args():
 if __name__ == "__main__":
     args = _parse_args()
     CHEMPROP_SMOKE_TEST = args.smoke_test
+    RUN_SEED = args.seed
 
     # Set up logging to both terminal and a results file
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1258,7 +1272,8 @@ if __name__ == "__main__":
     print(f"Started: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Working directory: {os.getcwd()}")
     print(f"Log file: {log_path}")
-    print(f"N_CPUS={N_CPUS}  smoke-test={CHEMPROP_SMOKE_TEST}")
+    print(f"N_CPUS={N_CPUS}  smoke-test={CHEMPROP_SMOKE_TEST}  seed={RUN_SEED}")
+    print(f"Results file: {_results_json_path()}")
 
     # System / package info
     print(f"Python: {sys.version.split()[0]}  Platform: {platform.platform()}")
