@@ -8,6 +8,7 @@ The seed is encoded in the results filename only, e.g.
 import argparse
 import json
 import os
+import re
 
 import matplotlib
 
@@ -30,6 +31,12 @@ _args = _parser.parse_args()
 RESULTS_JSON = _args.results or os.path.join(SCRIPT_DIR, f"results_incremental_seed{_args.seed}.json")
 FIGURES_DIR = os.path.join(SCRIPT_DIR, "figures")
 os.makedirs(FIGURES_DIR, exist_ok=True)
+
+# Seed tag used in every output filename/title.  Parsed from the results file
+# name so that --results (which may point at any seed) still labels correctly;
+# falls back to --seed when the name has no ``seed<N>`` component.
+_seed_match = re.search(r"seed(\d+)", os.path.basename(RESULTS_JSON))
+SEED_TAG = _seed_match.group(1) if _seed_match else str(_args.seed)
 
 if not os.path.exists(RESULTS_JSON):
     raise SystemExit(
@@ -121,7 +128,8 @@ sns.heatmap(_col_normalise(id_rmse), ax=ax_id_rmse, annot=_fmt_annot(id_rmse), *
 _axis_bottom(ax_id_rmse, "Model", "ID Splits  (RMSE)")
 sns.heatmap(_col_normalise(ood_rmse), ax=ax_ood_rmse, annot=_fmt_annot(ood_rmse), **rmse_common)
 _axis_bottom(ax_ood_rmse, "Model", "OOD Splits  (RMSE)")
-rmse_path = os.path.join(FIGURES_DIR, "heatmap_rmse.png")
+fig_rmse.suptitle(f"Seed {SEED_TAG}", fontsize=13, fontweight="bold")
+rmse_path = os.path.join(FIGURES_DIR, f"heatmap_rmse_seed{SEED_TAG}.png")
 fig_rmse.savefig(rmse_path, dpi=150, bbox_inches="tight")
 plt.close(fig_rmse)
 print(f"RMSE heatmap saved to {rmse_path}")
@@ -148,7 +156,8 @@ sns.heatmap(id_r2, ax=ax_id_bin, **r2b_common)
 _axis_bottom(ax_id_bin, "Model", "ID Splits  (R²)")
 sns.heatmap(ood_r2_binned, ax=ax_ood_bin, **r2b_common)
 _axis_bottom(ax_ood_bin, "Model", "OOD Splits  (Binned R²)")
-bin_path = os.path.join(FIGURES_DIR, "heatmap_r2.png")
+fig_bin.suptitle(f"Seed {SEED_TAG}", fontsize=13, fontweight="bold")
+bin_path = os.path.join(FIGURES_DIR, f"heatmap_r2_seed{SEED_TAG}.png")
 fig_bin.savefig(bin_path, dpi=150, bbox_inches="tight")
 plt.close(fig_bin)
 print(f"Binned-R² heatmap saved to {bin_path}")
@@ -183,7 +192,8 @@ if has_corr:
     _axis_bottom(ax_id_corr, "Model", "ID Splits  (ρ²  =  corr. coeff. squared)")
     sns.heatmap(ood_r2_corr_binned, ax=ax_ood_corr, **r2c_common)
     _axis_bottom(ax_ood_corr, "Model", "OOD Splits  (Binned ρ²)")
-    corr_path = os.path.join(FIGURES_DIR, "heatmap_r2_corr.png")
+    fig_corr.suptitle(f"Seed {SEED_TAG}", fontsize=13, fontweight="bold")
+    corr_path = os.path.join(FIGURES_DIR, f"heatmap_r2_corr_seed{SEED_TAG}.png")
     fig_corr.savefig(corr_path, dpi=150, bbox_inches="tight")
     plt.close(fig_corr)
     print(f"ρ² heatmap saved to {corr_path}")
@@ -237,7 +247,8 @@ if has_struct:
         cbar_kws={"label": "Relative RMSE\n(per property, 0 = best)", "shrink": 0.8},
     )
     _axis_bottom(ax_s_rmse, "Model", "Structure OOD  (RMSE)")
-    struct_path = os.path.join(FIGURES_DIR, "heatmap_structure_ood.png")
+    fig_s.suptitle(f"Seed {SEED_TAG}", fontsize=13, fontweight="bold")
+    struct_path = os.path.join(FIGURES_DIR, f"heatmap_structure_ood_seed{SEED_TAG}.png")
     fig_s.savefig(struct_path, dpi=150, bbox_inches="tight")
     plt.close(fig_s)
     print(f"Structure-OOD heatmap saved to {struct_path}")
