@@ -758,3 +758,5 @@ experiments/chemprop/plot_results.ipynb
 
 # GotenNet 3D conformer caches (regenerated on demand from SMILES)
 goten_3d_*.pkl
+
+reproduce/experiments/data/molformer_ckpts/*

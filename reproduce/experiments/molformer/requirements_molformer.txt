@@ -1,0 +1,75 @@
+# Frozen snapshot of the isolated MoLFormer env (CPU / CUDA / MPS).
+# The C++ extension in pytorch-fast-transformers 0.4.0 is built from source
+# against the pinned torch below; do NOT install this file with plain pip -- use
+# setup_env.sh, which passes --no-build-isolation and installs torch first.
+# This file exists only to record the exact resolved versions.
+#
+# Regenerate with:
+#   source reproduce/experiments/molformer/.venv_molformer/bin/activate
+#   uv pip freeze | sort -f > reproduce/experiments/molformer/requirements_molformer.txt
+#
+aiohappyeyeballs==2.7.1
+aiohttp==3.14.3
+aiosignal==1.4.0
+anyio==4.14.2
+async-timeout==5.0.1
+attrs==26.1.0
+certifi==2026.7.22
+charset-normalizer==3.4.9
+datasets==5.0.0
+dill==0.4.1
+einops==0.8.2
+exceptiongroup==1.3.1
+filelock==3.32.0
+frozenlist==1.8.0
+fsspec==2026.4.0
+h11==0.16.0
+hf-xet==1.5.2
+httpcore==1.0.9
+httpx==0.28.1
+huggingface-hub==0.36.2
+idna==3.18
+jinja2==3.1.6
+joblib==1.5.3
+lightning-utilities==0.15.3
+markupsafe==3.0.3
+mpmath==1.3.0
+multidict==6.7.1
+multiprocess==0.70.19
+networkx==3.4.2
+ninja==1.13.0
+numpy==2.2.6
+packaging==26.2
+pandas==2.3.3
+pillow==12.3.0
+propcache==0.5.2
+pyarrow==25.0.0
+python-dateutil==2.9.0.post0
+pytorch-fast-transformers==0.4.0
+pytorch-lightning==2.5.6
+pytorch-ranger==0.1.1
+pytz==2026.3.post1
+pyyaml==6.0.3
+rdkit==2026.3.4
+regex==2026.7.19
+requests==2.34.2
+safetensors==0.8.0
+scikit-learn==1.7.2
+scipy==1.15.3
+setuptools==83.0.0
+six==1.17.0
+sympy==1.13.1
+threadpoolctl==3.6.0
+tokenizers==0.22.2
+torch-optimizer==0.3.0
+torch==2.5.1
+torchmetrics==1.9.0
+torchvision==0.20.1
+tqdm==4.70.0
+transformers==4.57.6
+typing-extensions==4.16.0
+tzdata==2026.3
+urllib3==2.7.0
+wheel==0.47.0
+xxhash==3.8.1
+yarl==1.24.5

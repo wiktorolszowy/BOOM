@@ -129,3 +129,50 @@ After GotenNet is merged, re-run the heatmaps for that seed (they auto-discover 
 ```bash
 uv run python reproduce/make_heatmaps.py --seed 42
 ```
+
+## 6. (Optional) Add MoLFormer — a pretrained chemical language model
+
+MoLFormer ([IBM, Ross et al. 2022](https://github.com/IBM/molformer)) is the pretrained SMILES transformer reported in the paper's Table 2 (row **MolFormer**). Like GotenNet, it is added as an extra model **on top of** an existing per-seed results file, without touching the four descriptor / MPNN models. Because MoLFormer depends on the [IDIAP `pytorch-fast-transformers`](https://github.com/idiap/fast-transformers) C++ extension and pins an older `torch` build, it lives in its **own** virtual environment and communicates with the rest of the pipeline only through the split CSVs and the results JSON.
+
+This runner is backend-agnostic and works on CPU, CUDA, or Apple MPS. Following the [BOOM MoLFormer recipe](../experiments/molformer/readme.md), the original `apex.optimizers.FusedLAMB` is substituted with `torch_optimizer.Lamb`, so no CUDA / Apex is required. Fine-tuning uses the pretrained checkpoint `N-Step-Checkpoint_3_30000.ckpt` (the "Pretrained MoLFormer" variant used in the paper). The default fine-tuning length is **5 epochs**, matching BOOM's sibling ChemBERTa runner (`num_epochs=5` in [experiments/ChemBERTa/run_experiment_qm9_gap.py](../experiments/ChemBERTa/run_experiment_qm9_gap.py)); the paper's Appendix 8.4 states both transformers share the fine-tune schedule.
+
+First create the isolated environment (one time):
+
+```bash
+bash reproduce/experiments/molformer/setup_env.sh
+```
+
+Next, obtain the pretrained checkpoint (~200 MB). It is not redistributable through this repo, so it must be downloaded manually from the upstream IBM Box share:
+
+1. Open <https://ibm.box.com/v/MoLFormer-data> and download **`Pretrained MoLFormer.zip`**.
+2. Unzip it. Copy the file `Pretrained MoLFormer/checkpoints/N-Step-Checkpoint_3_30000.ckpt` into `reproduce/experiments/data/molformer_ckpts/` (create the folder if needed).
+
+Then run the model. It reads `reproduce/results_incremental_seed<seed>.json`, fine-tunes MoLFormer on the **same** KDE and UMAP-structure splits, and merges only `results["MolFormer"]` back in:
+
+```bash
+source reproduce/experiments/molformer/.venv_molformer/bin/activate
+# quick sanity check on one endpoint (tiny subset, 2 epochs, writes a *_smoke file):
+python reproduce/experiments/molformer/run_molformer.py --smoke-test --endpoints hof
+# full 5-epoch run for seed 42, all 10 endpoints:
+python reproduce/experiments/molformer/run_molformer.py --seed 42
+```
+
+MoLFormer is a ~48M-parameter transformer. If an Apple MPS backend is available, enable it with `--allow-mps`, and (optionally) subset to the smaller endpoints first to verify end-to-end plumbing:
+
+```bash
+python reproduce/experiments/molformer/run_molformer.py --seed 42 --allow-mps \
+    --endpoints hof,density,zpve
+```
+
+Run the other seeds (43, 44) the same way. Because the run can be long, `nohup` is recommended:
+
+```bash
+nohup python reproduce/experiments/molformer/run_molformer.py --seed 42 --allow-mps \
+    > molformer_seed42.out 2>&1 &
+```
+
+After MoLFormer is merged, re-run the heatmaps for that seed (they auto-discover the new model):
+
+```bash
+uv run python reproduce/make_heatmaps.py --seed 42
+```
