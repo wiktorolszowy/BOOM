@@ -1,0 +1,27 @@
+# Frozen snapshot of the isolated GotenNet env (single A10G, CUDA 12.4).
+# The +cu124 / +pt25cu124 wheels require custom indexes, so do NOT install this
+# file directly with plain pip. Use setup_env.sh, which passes the right
+# --index-url (PyTorch cu124) and -f (PyG wheels) flags. This file exists only
+# to record the exact resolved versions.
+#
+ase==3.29.0
+e3nn==0.6.0
+gotennet==1.1.2
+networkx==3.4.2
+numpy==2.2.6
+omegaconf==2.3.1
+pyg-lib==0.4.0+pt25cu124
+pytorch-lightning==2.6.5
+rdkit==2026.3.4
+scikit-learn==1.7.2
+scipy==1.15.3
+sympy==1.13.1
+torch-cluster==1.6.3+pt25cu124
+torch-geometric==2.8.0.post1
+torch-scatter==2.1.2+pt25cu124
+torch-sparse==0.6.18+pt25cu124
+torch-spline-conv==1.2.2+pt25cu124
+torch==2.5.1+cu124
+torchmetrics==1.9.0
+torchvision==0.20.1+cu124
+triton==3.1.0

@@ -122,6 +122,7 @@ celerybeat.pid
 # Environments
 .env
 .venv
+.venv_goten
 env/
 venv/
 ENV/
@@ -754,3 +755,6 @@ experiments/chemprop/plot_results.ipynb
 !**/results_incremental_seed*.json
 
 *.out
+
+# GotenNet 3D conformer caches (regenerated on demand from SMILES)
+goten_3d_*.pkl

@@ -95,3 +95,37 @@ nohup uv run python reproduce/make_heatmaps.py --seed 42 > heatmaps_seed42.out 2
 ```
 
 Output figures are saved in `reproduce/figures/`.
+
+## 5. (Optional) Add GotenNet — a 3D equivariant model
+
+GotenNet ([sarpaykent/GotenNet](https://github.com/sarpaykent/GotenNet), ICLR 2025) is a 3D-equivariant graph network. It is added as a **fifth** model *on top of* an existing per-seed results file, without touching the other four models. Because it needs the PyG CUDA extension stack (`torch_scatter` / `torch_sparse` / `torch_cluster`) built against a specific torch build, it lives in its **own** virtual environment and communicates with the rest of the pipeline only through the split CSVs and the results JSON.
+
+The target hardware for this repo is a single **NVIDIA A10G**. Following the BOOM protocol, GotenNet is trained for **50 epochs** per endpoint. (The paper used an A100; on the A10G the same 50-epoch schedule runs but takes longer.)
+
+First create the isolated environment (one time):
+
+```bash
+bash reproduce/experiments/gotennet/setup_env.sh
+```
+
+Then run the model. It reads `reproduce/results_incremental_seed<seed>.json`, trains GotenNet on the **same** KDE and UMAP-structure splits, and merges only `results["GotenNet"]` back in:
+
+```bash
+source reproduce/experiments/gotennet/.venv_goten/bin/activate
+# quick sanity check on one endpoint (tiny net, 3 epochs, writes a *_smoke file):
+python reproduce/experiments/gotennet/run_gotennet.py --smoke-test --endpoints hof
+# full 50-epoch run for seed 42, all 10 endpoints:
+python reproduce/experiments/gotennet/run_gotennet.py --seed 42
+```
+
+3D conformers are generated once per dataset group with RDKit (ETKDG + MMFF) and cached to `reproduce/experiments/data/goten_3d_{10k,QM9}.pkl`. Run the other seeds (43, 44) the same way. Because the run can be long, `nohup` is recommended:
+
+```bash
+nohup python reproduce/experiments/gotennet/run_gotennet.py --seed 42 > goten_seed42.out 2>&1 &
+```
+
+After GotenNet is merged, re-run the heatmaps for that seed (they auto-discover the new model):
+
+```bash
+uv run python reproduce/make_heatmaps.py --seed 42
+```
