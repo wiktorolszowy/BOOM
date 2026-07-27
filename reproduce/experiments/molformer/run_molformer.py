@@ -11,7 +11,7 @@ byte-for-byte.
 
 Why a separate script / environment?
 ------------------------------------
-MoLFormer (IBM, Ross et al. 2022; the model used in the BOOM paper's Table 2)
+MoLFormer (IBM, Ross et al. 2022; the model used in the BOOM paper's Figure 2)
 uses the IDIAP pytorch-fast-transformers linear-attention transformer with
 rotary embeddings. The build/runtime stack does not coexist cleanly with the
 main project's torch, and the BOOM protocol additionally substitutes
@@ -117,7 +117,7 @@ ENDPOINTS = [
 TENK_PROPS = {"hof", "density"}
 GROUP_OF = {p: ("10k" if p in TENK_PROPS else "QM9") for p, _ in ENDPOINTS}
 
-MODEL_NAME = "MolFormer"  # matches paper Table 2 row exactly
+MODEL_NAME = "MolFormer"  # matches paper Figure 2 row exactly
 
 # Pretrained MoLFormer architecture (matches the checkpoint shipped at
 # https://ibm.box.com/v/MoLFormer-data). Do NOT change unless swapping ckpt.
@@ -640,11 +640,10 @@ def _parse_args():
     ap.add_argument(
         "--epochs",
         type=int,
-        default=5,
-        help="Training epochs. Default matches the BOOM ChemBERTa "
-        "runners (num_epochs=5); the paper's Appendix 8.4 "
-        "states the two transformers share the fine-tune "
-        "schedule.",
+        default=30,
+        help="Training epochs (default: 30). BOOM's sibling ChemBERTa runners "
+        "use num_epochs=5; the paper's Appendix 8.4 states the two "
+        "transformers share the fine-tune schedule.",
     )
     ap.add_argument(
         "--batch-size",

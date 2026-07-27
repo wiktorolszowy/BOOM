@@ -132,9 +132,9 @@ uv run python reproduce/make_heatmaps.py --seed 42
 
 ## 6. (Optional) Add MoLFormer — a pretrained chemical language model
 
-MoLFormer ([IBM, Ross et al. 2022](https://github.com/IBM/molformer)) is the pretrained SMILES transformer reported in the paper's Table 2 (row **MolFormer**). Like GotenNet, it is added as an extra model **on top of** an existing per-seed results file, without touching the four descriptor / MPNN models. Because MoLFormer depends on the [IDIAP `pytorch-fast-transformers`](https://github.com/idiap/fast-transformers) C++ extension and pins an older `torch` build, it lives in its **own** virtual environment and communicates with the rest of the pipeline only through the split CSVs and the results JSON.
+MoLFormer ([IBM, Ross et al. 2022](https://github.com/IBM/molformer)) is the pretrained SMILES transformer reported in the paper's Figure 2 (row **MolFormer**). Like GotenNet, it is added as an extra model **on top of** an existing per-seed results file, without touching the four descriptor / MPNN models. Because MoLFormer depends on the [IDIAP `pytorch-fast-transformers`](https://github.com/idiap/fast-transformers) C++ extension and pins an older `torch` build, it lives in its **own** virtual environment and communicates with the rest of the pipeline only through the split CSVs and the results JSON.
 
-This runner is backend-agnostic and works on CPU, CUDA, or Apple MPS. Following the [BOOM MoLFormer recipe](../experiments/molformer/readme.md), the original `apex.optimizers.FusedLAMB` is substituted with `torch_optimizer.Lamb`, so no CUDA / Apex is required. Fine-tuning uses the pretrained checkpoint `N-Step-Checkpoint_3_30000.ckpt` (the "Pretrained MoLFormer" variant used in the paper). The default fine-tuning length is **5 epochs**, matching BOOM's sibling ChemBERTa runner (`num_epochs=5` in [experiments/ChemBERTa/run_experiment_qm9_gap.py](../experiments/ChemBERTa/run_experiment_qm9_gap.py)); the paper's Appendix 8.4 states both transformers share the fine-tune schedule.
+This runner is backend-agnostic and works on CPU, CUDA, or Apple MPS. Following the [BOOM MoLFormer recipe](../experiments/molformer/readme.md), the original `apex.optimizers.FusedLAMB` is substituted with `torch_optimizer.Lamb`, so no CUDA / Apex is required. Fine-tuning uses the pretrained checkpoint `N-Step-Checkpoint_3_30000.ckpt` (the "Pretrained MoLFormer" variant used in the paper). The default fine-tuning length is **30 epochs** (adjust with `--epochs`); BOOM's sibling ChemBERTa runner uses `num_epochs=5` ([experiments/ChemBERTa/run_experiment_qm9_gap.py](../experiments/ChemBERTa/run_experiment_qm9_gap.py)), and the paper's Appendix 8.4 states both transformers share the fine-tune schedule.
 
 First create the isolated environment (one time):
 
@@ -153,7 +153,7 @@ Then run the model. It reads `reproduce/results_incremental_seed<seed>.json`, fi
 source reproduce/experiments/molformer/.venv_molformer/bin/activate
 # quick sanity check on one endpoint (tiny subset, 2 epochs, writes a *_smoke file):
 python reproduce/experiments/molformer/run_molformer.py --smoke-test --endpoints hof
-# full 5-epoch run for seed 42, all 10 endpoints:
+# full 30-epoch run for seed 42, all 10 endpoints:
 python reproduce/experiments/molformer/run_molformer.py --seed 42
 ```
 
