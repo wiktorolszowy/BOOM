@@ -760,3 +760,7 @@ experiments/chemprop/plot_results.ipynb
 goten_3d_*.pkl
 
 reproduce/experiments/data/molformer_ckpts/*
+
+!**/chemprop_hpo_results.json
+
+reproduce/experiments/data/molformer_ckpts/*
